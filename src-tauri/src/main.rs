@@ -1,0 +1,284 @@
+#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
+
+//! NoteRust — Arabic desktop notes app.
+//!
+//! Startup order matters: the WebView2 runtime is verified first (with a clear
+//! message instead of an obscure panic), then the data directories and the
+//! database are prepared, and only then is the window created.
+
+mod commands;
+mod db_worker;
+mod paths;
+mod registry;
+mod watcher;
+
+use std::collections::HashMap;
+use std::sync::{Arc, Mutex};
+
+use tauri::menu::{Menu, MenuItem};
+use tauri::tray::TrayIconBuilder;
+use tauri::{Emitter, Manager};
+use tracing_subscriber::EnvFilter;
+
+use commands::AppState;
+use db_worker::DbHandle;
+use paths::Paths;
+
+/// Files passed on the command line (e.g. "Open with"), ignoring flags.
+fn file_args() -> Vec<String> {
+    std::env::args()
+        .skip(1)
+        .filter(|arg| !arg.starts_with('-'))
+        .filter(|arg| std::path::Path::new(arg).is_file())
+        .collect()
+}
+
+fn init_tracing(paths: &Paths) {
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+    let file = std::fs::File::create(paths.log_dir.join("noterust.log")).ok();
+    match file {
+        Some(file) => {
+            let _ = tracing_subscriber::fmt()
+                .with_env_filter(filter)
+                .with_writer(Mutex::new(file))
+                .with_ansi(false)
+                .try_init();
+        }
+        None => {
+            let _ = tracing_subscriber::fmt().with_env_filter(filter).try_init();
+        }
+    }
+}
+
+/// Shows a native error box (used when the app cannot start at all).
+fn fatal(title: &str, message: &str) {
+    tracing::error!("{title}: {message}");
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title(title)
+        .set_description(message)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
+}
+
+fn main() {
+    let paths = Paths::resolve();
+    if let Err(err) = paths.ensure() {
+        fatal(
+            "NoteRust",
+            &format!(
+                "تعذر إنشاء مجلد البيانات:\n{}\n\n{err}",
+                paths.data_dir.display()
+            ),
+        );
+        return;
+    }
+    init_tracing(&paths);
+    tracing::info!(dir = %paths.data_dir.display(), portable = paths.portable, "starting");
+
+    if !registry::webview2_installed() {
+        fatal(
+            "مطلوب WebView2",
+            "تطبيق NoteRust يحتاج مكوّن Microsoft Edge WebView2 Runtime.\n\n\
+             حمّله من: https://developer.microsoft.com/microsoft-edge/webview2/\n\
+             (وهو مثبّت افتراضياً في ويندوز 10 و11).",
+        );
+        return;
+    }
+
+    let db = match noterust_db::Db::open(&paths.db_path) {
+        Ok(db) => db,
+        Err(err) => {
+            fatal("NoteRust", &format!("تعذر فتح قاعدة البيانات:\n{err}"));
+            return;
+        }
+    };
+
+    // Housekeeping that must never block startup for long.
+    let retention =
+        noterust_db::settings::get_i64(db.conn(), "trash_retention_days", 30).unwrap_or(30);
+    if let Ok(removed) = noterust_db::notes::purge_expired(db.conn(), retention) {
+        if removed > 0 {
+            tracing::info!("purged {removed} expired notes from the trash");
+        }
+    }
+    let backup_retention =
+        noterust_db::settings::get_i64(db.conn(), "backup_retention", 14).unwrap_or(14);
+    match noterust_db::backup::auto_daily(db.conn(), &paths.backup_dir, backup_retention) {
+        Ok(Some(path)) => tracing::info!(path = %path.display(), "daily backup created"),
+        Ok(None) => {}
+        Err(err) => tracing::warn!("daily backup failed: {err}"),
+    }
+
+    let handle = DbHandle::spawn(db);
+    let pending: Arc<Mutex<Vec<String>>> = Arc::new(Mutex::new(file_args()));
+    let pending_for_plugin = pending.clone();
+    let paths_for_state = paths.clone();
+
+    let app = tauri::Builder::default()
+        .plugin(tauri_plugin_window_state::Builder::default().build())
+        .plugin(tauri_plugin_single_instance::init(
+            move |app, argv, _cwd| {
+                let files: Vec<String> = argv
+                    .into_iter()
+                    .filter(|arg| !arg.starts_with('-'))
+                    .filter(|arg| std::path::Path::new(arg).is_file())
+                    .collect();
+                if !files.is_empty() {
+                    if let Ok(mut guard) = pending_for_plugin.lock() {
+                        guard.extend(files);
+                    }
+                    let _ = app.emit("open-files", ());
+                }
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            },
+        ))
+        .setup(move |app| {
+            let state = AppState {
+                db: handle.clone(),
+                paths: paths_for_state.clone(),
+                app: app.handle().clone(),
+                watchers: Arc::new(Mutex::new(HashMap::new())),
+                pending_open: pending.clone(),
+            };
+            app.manage(state);
+
+            build_tray(app)?;
+            Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
+                let app = window.app_handle();
+                let Some(state) = app.try_state::<AppState>() else {
+                    return;
+                };
+                let minimise = state
+                    .db
+                    .call(|db| {
+                        noterust_db::settings::get(db.conn(), "close_to_tray")
+                            .map(|value| value.as_deref() == Some("true"))
+                    })
+                    .unwrap_or(false);
+                if minimise {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::list_notes,
+            commands::get_note,
+            commands::create_note,
+            commands::update_note_content,
+            commands::update_note_title,
+            commands::move_note,
+            commands::pin_note,
+            commands::archive_note,
+            commands::set_note_color,
+            commands::set_note_direction,
+            commands::delete_note,
+            commands::restore_note,
+            commands::purge_note,
+            commands::empty_trash,
+            commands::duplicate_note,
+            commands::search_notes,
+            commands::counts,
+            commands::set_note_tags,
+            commands::list_tags,
+            commands::delete_tag,
+            commands::note_versions,
+            commands::restore_version,
+            commands::lock_note,
+            commands::unlock_note,
+            commands::save_locked_note,
+            commands::remove_lock,
+            commands::list_folders,
+            commands::create_folder,
+            commands::update_folder,
+            commands::delete_folder,
+            commands::reorder_folder,
+            commands::list_tasks,
+            commands::create_task,
+            commands::update_task,
+            commands::complete_task,
+            commands::delete_task,
+            commands::list_categories,
+            commands::create_category,
+            commands::add_transaction,
+            commands::list_transactions,
+            commands::delete_transaction,
+            commands::monthly_summary,
+            commands::export_transactions_csv,
+            commands::get_settings,
+            commands::set_setting,
+            commands::data_info,
+            commands::open_data_folder,
+            commands::set_default_editor,
+            commands::set_autostart,
+            commands::backup_now,
+            commands::list_backups,
+            commands::restore_backup,
+            commands::export_json,
+            commands::export_zip,
+            commands::import_json_file,
+            commands::open_path,
+            commands::open_file_dialog,
+            commands::open_startup_files,
+            commands::save_external_file,
+            commands::save_file_as,
+            commands::export_note_file,
+            commands::import_dialog,
+            commands::import_folder_dialog,
+            commands::stop_watching,
+            commands::reload_external_file,
+            commands::discard_external_link,
+            commands::set_window_title,
+            commands::refresh_daily_backup,
+        ])
+        .build(tauri::generate_context!());
+
+    match app {
+        Ok(app) => app.run(|_app, _event| {}),
+        Err(err) => fatal("NoteRust", &format!("تعذر تشغيل التطبيق:\n{err}")),
+    }
+}
+
+fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
+    let show = MenuItem::with_id(app, "show", "إظهار NoteRust", true, None::<&str>)?;
+    let new_note = MenuItem::with_id(app, "new-note", "ملاحظة جديدة", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "خروج", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&show, &new_note, &quit])?;
+
+    let mut builder = TrayIconBuilder::with_id("main-tray")
+        .tooltip("NoteRust")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "show" => {
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.unminimize();
+                    let _ = window.set_focus();
+                }
+            }
+            "new-note" => {
+                let _ = app.emit("new-note", ());
+                if let Some(window) = app.get_webview_window("main") {
+                    let _ = window.show();
+                    let _ = window.set_focus();
+                }
+            }
+            "quit" => app.exit(0),
+            _ => {}
+        });
+
+    if let Some(icon) = app.default_window_icon().cloned() {
+        builder = builder.icon(icon);
+    }
+    builder.build(app)?;
+    Ok(())
+}

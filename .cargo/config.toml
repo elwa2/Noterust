@@ -1,0 +1,10 @@
+# Every build targets MinGW-w64 / GNU on Windows. See README.md.
+[build]
+target = "x86_64-pc-windows-gnu"
+
+[target.x86_64-pc-windows-gnu]
+linker = "gcc"
+rustflags = [
+  "-C", "target-feature=+crt-static",
+  "-C", "link-arg=-static-libgcc",
+]

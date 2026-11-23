@@ -1,0 +1,36 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/core",
+  "crates/db",
+  "crates/fileio",
+  "crates/search",
+  "crates/crypto",
+  "src-tauri",
+]
+
+[workspace.package]
+version = "1.0.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+noterust-core = { path = "crates/core" }
+noterust-db = { path = "crates/db" }
+noterust-fileio = { path = "crates/fileio" }
+noterust-search = { path = "crates/search" }
+noterust-crypto = { path = "crates/crypto" }
+
+# Statically linked WebView2 loader: the portable exe needs no DLL. See vendor/.
+[patch.crates-io]
+webview2-com-sys = { path = "vendor/webview2-com-sys" }
+
+[profile.release]
+lto = true
+strip = true
+codegen-units = 1
+opt-level = "s"
+panic = "abort"
+
+[profile.dev]
+opt-level = 1

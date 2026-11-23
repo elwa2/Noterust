@@ -1,0 +1,381 @@
+# NoteRust — تطبيق ملاحظات عربي لسطح مكتب ويندوز
+
+تطبيق ملاحظات محلي كامل، بديل لـ Notepad بواجهة عربية من اليمين إلى اليسار، وثيم داكن،
+وقاعدة بيانات SQLite على جهازك. بُني بلغة Rust مع واجهة Tauri 2 + Svelte، ويُوزَّع كملف
+`exe` واحد محمول لا يحتاج تثبيتاً.
+
+<div dir="rtl">
+
+## المحتويات
+
+- [أبرز المزايا](#أبرز-المزايا)
+- [المتطلبات](#المتطلبات)
+- [1) تثبيت MinGW-w64](#1-تثبيت-mingw-w64)
+- [2) تثبيت Rust بـ GNU toolchain](#2-تثبيت-rust-بـ-gnu-toolchain)
+- [3) بناء المشروع وتشغيله](#3-بناء-المشروع-وتشغيله)
+- [4) إنتاج الملف المحمول](#4-إنتاج-الملف-المحمول)
+- [أين تُحفظ البيانات](#أين-تُحفظ-البيانات)
+- [البنية المعمارية](#البنية-المعمارية)
+- [مخطط قاعدة البيانات](#مخطط-قاعدة-البيانات)
+- [الاختصارات](#الاختصارات)
+- [الملفات والترميزات](#الملفات-والترميزات)
+- [القفل والتشفير](#القفل-والتشفير)
+- [حل المشاكل الشائعة](#حل-المشاكل-الشائعة)
+- [الاختبارات](#الاختبارات)
+
+## أبرز المزايا
+
+- **ثلاثة أعمدة RTL**: الشريط الجانبي (ملاحظات/مجلدات/سلة/مهام/مالية)، قائمة الملاحظات
+  مع بحث فوري وتجميع حسب التاريخ، ثم المحرر.
+- **واجهة قابلة للتحكم**: أيقونات SVG موحّدة، سحب حدود الأعمدة لتغيير عرضها (ويُحفظ)،
+  إخفاء الشريط الجانبي (Ctrl+B)، حفظ حجم/موضع النافذة بين التشغيلات، ودليل استخدام داخلي بـ F1.
+- **تفاصيل عربية دقيقة**: صيغ الجمع الست (ملاحظة/ملاحظتان/ملاحظات…)، تواريخ نسبية
+  (اليوم/أمس/اسم اليوم)، عملات متعددة (الجنيه المصري افتراضياً)، وقبول المبالغ
+  بالأرقام العربية-الهندية أو اللاتينية.
+- **محرر كامل**: تبويبات مع استعادة الجلسة، حفظ تلقائي بعد ٥٠٠ مللي ثانية، تراجع/إعادة،
+  بحث واستبدال مع Regex، الذهاب إلى سطر، تكرار السطر، إدراج التاريخ بـ F5، التفاف
+  الأسطر، تبديل RTL/LTR، تكبير بـ Ctrl + عجلة الماوس، قائمة «/» لإدراج عناصر Markdown.
+- **ملفات خارجية**: فتح `txt / log / md / json / xml / csv / ini / cfg / bat / ps1`
+  وأي نص، كشف الترميز تلقائياً (UTF-8 / UTF-16 / Windows-1256 عبر chardetng)، الحفاظ
+  على نوع نهاية السطر (CRLF/LF)، مراقبة تغيّر الملف من خارج التطبيق وتنبيهك، كتابة
+  ذرية (ملف مؤقت ثم إعادة تسمية) وحماية من فقدان البيانات.
+- **تنظيم**: مجلدات متداخلة مع أيقونة ولون، وسوم، تثبيت، أرشفة، ألوان، سحب وإفلات
+  الملاحظات بين المجلدات، سلة محذوفات مع حذف نهائي تلقائي بعد ٣٠ يوماً (قابل للضبط).
+- **خصوصية**: قفل ملاحظة بكلمة مرور (AES-256-GCM + Argon2)، تاريخ إصدارات لكل ملاحظة.
+- **متابعة**: مهام مع تاريخ استحقاق وأولوية وتكرار، وقوائم التحقق داخل الملاحظات تظهر
+  تلقائياً في صفحة المهام؛ دخل ومصروفات مع ملخص شهري ومخطط عمودي ومخطط دائري
+  للفئات وتصدير CSV.
+- **سلة محذوفات آمنة**: عرض للقراءة فقط مع عدّاد الأيام المتبقية، إفراغ دفعة واحدة،
+  واسترجاع سريع مع زر «تراجع» في الإشعار بعد الحذف.
+- **بيانات آمنة**: WAL، نسخة احتياطية يومية تلقائية (آخر ١٤)، نسخ يدوية واستعادة،
+  تصدير JSON أو ZIP من ملفات Markdown، واستيرادها.
+- **تجربة ويندوز**: نسخة واحدة فقط (single instance) مع تمرير الملفات للنسخة المفتوحة،
+  أيقونة في صينية النظام، إغلاق إلى الصينية، تشغيل مع بدء ويندوز، وفتح الملفات بـ
+  «Open with».
+
+## المتطلبات
+
+| الأداة | الإصدار المستخدم | ملاحظات |
+| --- | --- | --- |
+| Rust | stable 1.100 | هدف `x86_64-pc-windows-gnu` |
+| MinGW-w64 (gcc) | 16.2 (WinLibs UCRT) | أي gcc 13+ من MSYS2 UCRT64 يعمل |
+| Node.js | 22 LTS | لبناء الواجهة فقط |
+| WebView2 | 157 | مثبّت في ويندوز ١٠ و١١؛ فحص تلقائي عند التشغيل |
+
+لا حاجة إلى Visual Studio أو MSVC أو Windows SDK أو WiX أو vcpkg. كل الكود (بما فيه
+SQLite المضمّن عبر `rusqlite` بخاصية `bundled`) يُترجم بـ gcc.
+
+## 1) تثبيت MinGW-w64
+
+### الخيار أ: MSYS2 (UCRT64)
+
+1. نزّل MSYS2 من <https://www.msys2.org> وثبّته.
+2. افتح «MSYS2 UCRT64» ونفّذ:
+
+```bash
+pacman -Syu
+pacman -S --needed mingw-w64-ucrt-x86_64-gcc
+```
+
+3. أضف إلى `PATH` (من إعدادات متغيرات البيئة في ويندوز):
+
+```
+C:\msys64\ucrt64\bin
+```
+
+4. تحقق في `cmd`:
+
+```bat
+gcc --version
+```
+
+### الخيار ب: WinLibs (بدون مثبّت)
+
+نزّل حزمة WinLibs القائمة على UCRT من <https://winlibs.com>، فك الضغط، وأضف مجلد `bin`
+إلى `PATH`. هذا ما استُخدم في بناء النسخة الحالية.
+
+> يجب أن يكون `gcc` هو نفسه الموجود في `PATH` عند البناء. إن كان لديك أكثر من نسخة،
+> ضع مسار النسخة الصحيحة أولاً.
+
+## 2) تثبيت Rust بـ GNU toolchain
+
+1. نزّل `rustup-init.exe` من <https://rustup.rs>.
+2. شغّله مع تحديد المضيف GNU مباشرة:
+
+```bat
+rustup-init.exe --default-host x86_64-pc-windows-gnu
+```
+
+أو بعد تثبيت rustup العادي:
+
+```bat
+rustup toolchain install stable-x86_64-pc-windows-gnu
+rustup default stable-x86_64-pc-windows-gnu
+rustup target add x86_64-pc-windows-gnu
+```
+
+3. تحقق:
+
+```bat
+rustc --version --verbose
+```
+
+يجب أن يظهر:
+
+```
+host: x86_64-pc-windows-gnu
+```
+
+إن ظهر `host: x86_64-pc-windows-msvc` فأنت على الـ toolchain الخطأ؛ نفّذ
+`rustup default stable-x86_64-pc-windows-gnu`.
+
+## 3) بناء المشروع وتشغيله
+
+المشروع workspace: خمس مكتبات في `crates/` + تطبيق Tauri في `src-tauri/` + واجهة
+Svelte في `ui/`.
+
+```bash
+# 1. الواجهة (مطلوبة قبل ترجمة Tauri لأنها تُضمَّن داخل الـ exe)
+cd ui
+npm install
+npm run build
+cd ..
+
+# 2. الاختبارات (كل المكتبات في الذاكرة)
+cargo test --workspace
+
+# 3. فحص clippy
+cargo clippy --workspace --all-targets
+
+# 4. بناء نسخة التطوير
+cargo build -p noterust
+
+# 5. تشغيلها
+./target/x86_64-pc-windows-gnu/debug/noterust.exe
+```
+
+للتطوير السريع للواجهة مع إعادة التحميل التلقائي:
+
+```bash
+cargo tauri dev
+```
+
+> إن كان `cargo` أو `gcc` غير موجود في `PATH` داخل Git Bash، أضفهما:
+
+```bash
+export PATH="$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
+```
+
+ملفات الضبط:
+
+- `.cargo/config.toml` يثبّت الهدف `x86_64-pc-windows-gnu`، والـ linker `gcc`،
+  و`-C target-feature=+crt-static` و`-C link-arg=-static-libgcc`.
+- `rust-toolchain.toml` يثبّت نفس القناة والهدف لكل من يفتح المشروع.
+- `Cargo.toml` يستخدم `[patch.crates-io]` لنسخة معدّلة من `webview2-com-sys`
+  (مجلد `vendor/`) تربط `WebView2LoaderStatic.lib` ثابتاً بدل `WebView2Loader.dll`.
+
+## 4) إنتاج الملف المحمول
+
+```bash
+cargo build --release -p noterust
+```
+
+الناتج:
+
+```
+target/x86_64-pc-windows-gnu/release/noterust.exe
+```
+
+نسخة جاهزة أيضاً في جذر المشروع باسم `NoteRust.exe` (نحو ٦٫٩ ميجابايت). انسخها إلى أي
+مجلد وشغّلها؛ لا تحتاج DLLs من MinGW. للتحقق:
+
+```bash
+ldd NoteRust.exe
+```
+
+ستجد فقط مكتبات ويندوز النظامية (`KERNEL32.dll`, `USER32.dll`, `ole32.dll`, …) ولا
+أثر لـ `libgcc_s_seh-1.dll` أو `libstdc++-6.dll` أو `libwinpthread-1.dll` أو
+`WebView2Loader.dll`.
+
+### الوضع المحمول
+
+ضع ملفاً فارغاً باسم `portable.flag` بجوار الـ exe:
+
+```bat
+type nul > portable.flag
+```
+
+عندها تُحفظ البيانات في `NoteRust-Data` بجوار الـ exe بدل `AppData`، فتبقى كل شيء على
+ذاكرة USB مثلاً. احذف الملف للعودة إلى `AppData`.
+
+### مثبّت اختياري (NSIS)
+
+إعدادات `tauri.conf.json` تحتوي هدف `nsis`، ويمكن بناء مثبّت بـ:
+
+```bash
+cargo tauri build
+```
+
+لا يستخدم المشروع WiX/MSI. التوزيع الأساسي يبقى الـ exe المحمول.
+
+## أين تُحفظ البيانات
+
+| الوضع | المسار |
+| --- | --- |
+| عادي | `%APPDATA%\noterust\NoteRust\data\` |
+| محمول | `<مجلد exe>\NoteRust-Data\` |
+
+داخل المجلد:
+
+```
+noterust.db        قاعدة SQLite (+ noterust.db-wal / -shm)
+backups/           نسخ احتياطية (noterust-YYYYMMDD-HHMMSS.db)
+logs/noterust.log  سجل التشغيل
+```
+
+ويُحفظ حجم/موضع النافذة وحالة التكبير في
+`%APPDATA%\io.noterust.app\.window-state.json` (يُدار بواسطة
+`tauri-plugin-window-state`)، وكذلك تفضيلات عرض الأعمدة في `localStorage`
+داخل WebView.
+
+قاعدة البيانات تعمل بـ `journal_mode=WAL`, `foreign_keys=ON`, `synchronous=NORMAL`،
+وكل عملياتها تنفَّذ في خيط مستقل عبر قنوات، فلا تتجمد الواجهة.
+
+## البنية المعمارية
+
+```
+Noterust/
+├─ crates/
+│  ├─ core/     النماذج + منطق نصوص (تطبيع، عدّادات، تاريخ عربي، Checklist)
+│  ├─ db/       الاتصال، الترحيلات، المستودعات، البحث، النسخ الاحتياطي، التصدير
+│  ├─ fileio/   قراءة/كتابة، كشف الترميز، CRLF/LF، ropey، مراقبة الملفات
+│  ├─ search/   FTS5 + تطبيع عربي + بناء استعلام MATCH
+│  └─ crypto/   AES-256-GCM + Argon2 (نسق enc:v1)
+├─ src-tauri/   أوامر Tauri، خيط قاعدة البيانات، المسارات، السجل، المراقبة
+├─ ui/          Svelte 5 + TypeScript (ثلاثة أعمدة، ثيم داكن، أرقام عربية)
+├─ vendor/      webview2-com-sys معدّل للربط الثابت
+├─ tests/       اختبارات تكامل
+└─ .cargo/config.toml
+```
+
+- **Repository pattern + Service layer**: الواجهة لا تلمس SQLite أبداً؛ تنادي أوامر
+  Tauri التي تنادي مستودعات `noterust-db`.
+- **خيط قاعدة بيانات واحد** (`db_worker.rs`) مع قناة أوامر ورد، و`spawn_blocking` في
+  أوامر Tauri، لمنع أي تجميد.
+- **البحث**: عمودان `search_title` و`search_body` يُملآن بنص مطبَّع (إزالة التشكيل،
+  توحيد الهمزات/الياء/التاء المربوطة، إزالة «ال» للكلمات الطويلة)، و triggers تنقلها
+  إلى جدول `notes_fts` الافتراضي.
+
+## مخطط قاعدة البيانات
+
+`folders(id, parent_id, name, icon, color, sort_order, created_at)` ·
+`notes(id, folder_id, title, content, content_format, is_pinned, is_archived, is_locked,
+color, direction, source_path, encoding, line_ending, created_at, updated_at, deleted_at,
+search_title, search_body)` ·
+`notes_fts` (FTS5) · `note_versions(id, note_id, content, saved_at)` ·
+`tags(id, name, color)` · `note_tags(note_id, tag_id)` ·
+`tasks(id, note_id, title, description, due_at, priority, is_done, repeat_rule,
+created_at, completed_at)` · `transactions(id, kind, amount, currency, category_id, note,
+occurred_at)` · `categories(id, name, kind, color)` · `settings(key, value)` ·
+`attachments(id, note_id, filename, mime, path)`.
+
+الترحيلات تُدار بـ `rusqlite_migration` وتُنفَّذ تلقائياً عند أول تشغيل.
+
+## الاختصارات
+
+| الاختصار | الوظيفة |
+| --- | --- |
+| `Ctrl+N` | ملاحظة جديدة |
+| `Ctrl+O` | فتح ملف |
+| `Ctrl+S` / `Ctrl+Shift+S` | حفظ / حفظ باسم |
+| `Ctrl+W` | إغلاق تبويب |
+| `Ctrl+Tab` | التبديل بين التبويبات |
+| `Ctrl+F` / `Ctrl+H` | بحث / استبدال |
+| `Ctrl+Shift+F` | بحث في كل الملاحظات |
+| `Ctrl+1 / Ctrl+2 / Ctrl+3` | الملاحظات / المهام / الدخل والمصروفات |
+| `Ctrl+B` | إظهار أو إخفاء الشريط الجانبي |
+| `F1` | دليل الاستخدام |
+| `Ctrl+P` | لوحة الأوامر |
+| `Ctrl+G` | الذهاب إلى سطر |
+| `Ctrl+Z` / `Ctrl+Y` | تراجع / إعادة |
+| `Ctrl+D` | تكرار السطر |
+| `F5` | إدراج التاريخ والوقت |
+| `Ctrl+Shift+N` | مجلد جديد |
+| `Ctrl+,` | الإعدادات |
+| `Delete` | حذف إلى السلة |
+| `/` | قائمة إدراج العناصر |
+| `Ctrl` + عجلة الفأرة | تكبير/تصغير الخط |
+
+## الملفات والترميزات
+
+- كشف الترميز: BOM أولاً، ثم محاولة UTF-8 صارمة، ثم chardetng، مع دعم UTF-16 LE/BE
+  و Windows-1256 (ملفات Notepad القديمة).
+- يُحفظ الملف بنفس ترميزه الأصلي ونفس نوع نهاية السطر (CRLF/LF) المكتشف.
+- الملفات الكبيرة: تُقرأ عبر `ropey` بحد ٤ ملايين حرف؛ عند تجاوز الحد يُحمَّل جزء
+  ويظهر تنبيه، ويُمنع الحفظ فوق الملف لمنع الإتلاف.
+- الحفظ الخارجي ذري: كتابة إلى `*.tmp` ثم `rename` فوق الأصل.
+- فتح ملف عبر «Open with» أو سطر الأوامر يمرَّر للنسخة المفتوحة (single instance).
+
+## القفل والتشفير
+
+- عند القفل يُشفَّر النص بـ AES-256-GCM، والمفتاح يُشتق بكلمة المرور عبر Argon2.
+- لا تُخزَّن كلمة المرور ولا يمكن استرجاعها.
+- الملاحظة المقفلة لا تُفهرس في FTS5 (نصها مشفّر)، ويُطلب كلمة المرور لعرضها في
+  الجلسة الحالية.
+- تاريخ الإصدارات يُحفظ قبل كل حفظ كبير، ويمكن استرجاع أي نسخة.
+
+## حل المشاكل الشائعة
+
+**`error: linker 'gcc' not found`**
+أضف مجلد `bin` الخاص بـ MinGW إلى `PATH` وأعد فتح الطرفية. تحقق بـ `where gcc`.
+
+**`cannot find -lWebView2Loader` أو أخطاء ربط WebView2**
+تأكد أن الـ patch موجود: `Cargo.toml` يحتوي
+`[patch.crates-io] webview2-com-sys = { path = "vendor/webview2-com-sys" }`، وأن
+`vendor/webview2-com-sys/build.rs` ينسخ `WebView2LoaderStatic.lib` باسم
+`libWebView2LoaderStatic.a`. ثم `cargo clean -p webview2-com-sys` وأعد البناء.
+
+**تحذير `corrupt .drectve at end of def file` أو `multiple non-default manifests`**
+تحذيرات linker غير ضارة تأتي من موارد المكتبة الثابتة المخصّصة؛ البناء والتطبيق يعملان.
+
+**`The application was unable to start correctly (0xc000007b)` أو DLL ناقص**
+هذه النسخة تربط CRT ثابتاً. إن ظهرت المشكلة مع نسخة بنيتها بنفسك، تأكد من وجود
+`+crt-static` و`-static-libgcc` في `.cargo/config.toml`، ثم افحص بـ `ldd`.
+
+**نافذة بيضاء أو رسالة «مطلوب WebView2»**
+ثبّت Microsoft Edge WebView2 Runtime من
+<https://developer.microsoft.com/microsoft-edge/webview2/> (مثبّت افتراضياً في
+ويندوز ١٠/١١ المحدّث). التطبيق يفحصه عند البدء ويعرض رسالة عربية واضحة.
+
+**الخط العربي لا يظهر**
+خط Cairo مضمّن داخل التطبيق (`ui/src/main.ts` يستورد `@fontsource/cairo`)، فلا يعتمد
+على خطوط النظام. يمكن تغيير الخط من الإعدادات.
+
+**تعيين التطبيق كمحرر افتراضي لا ينجح**
+ويندوز يمنع التعيين البرمجي الكامل ويُظهر مربع حوار تأكيد للمستخدم؛ هذا سلوك النظام
+وليس خطأً في التطبيق.
+
+**البيانات لا تظهر بعد نقل الـ exe**
+في الوضع العادي البيانات في `%APPDATA%\noterust\NoteRust\data`، وليست بجوار الـ exe. إن
+أردت بيانات متنقلة استخدم `portable.flag` قبل أول تشغيل.
+
+## الاختبارات
+
+```bash
+cargo test --workspace
+cargo clippy --workspace --all-targets
+cargo fmt --all -- --check
+```
+
+الاختبارات تغطي: التطبيع العربي وبناء استعلام البحث، كشف الترميز وتحويل UTF-16
+CRLF/LF، التشفير وفكّه (وكلمة مرور خاطئة)، الترحيلات و CRUD الملاحظات والمجلدات
+والوسوم والمهام والمالية والنسخ الاحتياطي والاستيراد/التصدير، وحالات السلة والقفل
+وتاريخ الإصدارات. جميع اختبارات المشروع تمر (٨٩ اختباراً).
+
+---
+
+## الترخيص
+
+MIT. استخدم التطبيق وعدّله بحرية.
+
+</div>

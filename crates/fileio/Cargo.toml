@@ -1,0 +1,15 @@
+[package]
+name = "noterust-fileio"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+noterust-core = { workspace = true }
+encoding_rs = "0.8"
+chardetng = "0.1"
+ropey = "1"
+notify = "8"
+thiserror = "2"
+
+[dev-dependencies]

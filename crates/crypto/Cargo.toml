@@ -1,0 +1,15 @@
+[package]
+name = "noterust-crypto"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+base64 = "0.22"
+rand = "0.9"
+aes-gcm = "0.10"
+argon2 = "0.5"
+thiserror = "2"
+zeroize = "1"
+
+[dev-dependencies]

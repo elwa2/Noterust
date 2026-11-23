@@ -1,0 +1,33 @@
+[package]
+name = "noterust"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "NoteRust — تطبيق ملاحظات عربي لسطح المكتب"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri-plugin-single-instance = "2"
+# Restores window size/position/maximized state across launches.
+tauri-plugin-window-state = "2"
+noterust-core = { workspace = true }
+noterust-db = { workspace = true }
+noterust-fileio = { workspace = true }
+noterust-crypto = { workspace = true }
+noterust-search = { workspace = true }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+chrono = "0.4"
+directories = "6"
+rfd = "0.15"
+winreg = "0.55"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+# Statically links Microsoft's WebView2 loader, so the portable exe needs no DLL.
+webview2-com-sys = "0.39"
+
+[features]
+default = []
