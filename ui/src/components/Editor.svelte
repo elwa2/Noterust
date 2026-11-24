@@ -27,6 +27,8 @@
   let note: Note | null = null;
   let content = "";
   let loadedKey = "";
+  /** The note `content` currently belongs to, used to flush edits on tab switches. */
+  let loadedNote: Note | null = null;
   let dirty = false;
   let textarea: HTMLTextAreaElement | null = null;
 
@@ -87,6 +89,10 @@
   $: if (note) {
     const key = `${note.id}:${passwords[note.id] ?? ""}`;
     if (key !== loadedKey) {
+      // Switching tabs while a debounce is pending used to drop the last edits.
+      if (dirty && loadedNote && !loadedNote.deletedAt) {
+        void flushSave(loadedNote, content);
+      }
       loadedKey = key;
       void hydrate(note);
     }
@@ -96,8 +102,33 @@
     /* keeps the move-select in sync with the loaded note */
   }
 
+  /** Saves an older note's pending edits before its tab is switched away. */
+  async function flushSave(target: Note, text: string) {
+    clearTimeout(saveTimer);
+    dirty = false;
+    const password = passwords[target.id];
+    try {
+      let saved: Note | null = null;
+      if (target.isLocked && password) {
+        saved = await api.saveLockedNote(target.id, password, text);
+      } else if (target.sourcePath) {
+        saved = await api.saveExternalFile(target.id, text);
+      } else if (!target.isLocked) {
+        saved = await api.updateNoteContent(target.id, text);
+      }
+      if (saved) {
+        // Keep the tab's cached copy in sync without stealing the window title.
+        tabs.update((list) => list.map((item) => (item.id === saved!.id ? saved! : item)));
+        scheduleListRefresh();
+      }
+    } catch (error) {
+      store.toast(store.errorMessage(error), "error");
+    }
+  }
+
   async function hydrate(current: Note) {
     unlockError = "";
+    loadedNote = current;
     if (current.isLocked) {
       const password = passwords[current.id];
       if (!password) {

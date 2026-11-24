@@ -10,11 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use noterust_core::{
-    Category, MonthlySummary, Note, NoteSummary, NoteVersion, SearchHit, Tag, TaskItem,
+    Category, MonthlySummary, Note, NoteSummary, NoteVersion, SearchHit, Snippet, Tag, TaskItem,
     TransactionItem,
 };
 use noterust_db::export::ImportStats;
 use noterust_db::finance::TransactionDraft;
+use noterust_db::snippets::SnippetDraft;
 use noterust_db::tasks::TaskDraft;
 use noterust_db::{Db, DbError, ListQuery, SortBy};
 use noterust_fileio::{watch_path, TextDocument};
@@ -537,6 +538,84 @@ pub async fn delete_task(state: State<'_, AppState>, id: i64) -> Result<(), Stri
 }
 
 // ---------------------------------------------------------------------------
+// Snippets (code + prompts)
+// ---------------------------------------------------------------------------
+
+#[tauri::command]
+pub async fn list_snippets(
+    state: State<'_, AppState>,
+    query: Option<String>,
+    kind: Option<String>,
+) -> Result<Vec<Snippet>, String> {
+    let db = state.db.clone();
+    db_call(db, move |db| {
+        noterust_db::snippets::list(db.conn(), query.as_deref(), kind.as_deref())
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn create_snippet(
+    state: State<'_, AppState>,
+    draft: SnippetDraft,
+) -> Result<Snippet, String> {
+    let db = state.db.clone();
+    db_call(db, move |db| {
+        noterust_db::snippets::create(db.conn(), &draft)
+    })
+    .await
+}
+
+/// Fields the UI may change on an existing snippet.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+pub struct SnippetPatch {
+    pub title: Option<String>,
+    pub kind: Option<String>,
+    pub language: Option<String>,
+    pub content: Option<String>,
+    pub tags: Option<String>,
+    pub pinned: Option<bool>,
+}
+
+#[tauri::command]
+pub async fn update_snippet(
+    state: State<'_, AppState>,
+    id: i64,
+    patch: SnippetPatch,
+) -> Result<Snippet, String> {
+    let db = state.db.clone();
+    db_call(db, move |db| {
+        let updated = noterust_db::snippets::update(
+            db.conn(),
+            id,
+            patch.title.as_deref(),
+            patch.kind.as_deref(),
+            patch.language.as_deref(),
+            patch.content.as_deref(),
+            patch.tags.as_deref(),
+        )?;
+        match patch.pinned {
+            Some(value) => noterust_db::snippets::set_pinned(db.conn(), id, value),
+            None => Ok(updated),
+        }
+    })
+    .await
+}
+
+#[tauri::command]
+pub async fn delete_snippet(state: State<'_, AppState>, id: i64) -> Result<(), String> {
+    let db = state.db.clone();
+    db_call(db, move |db| noterust_db::snippets::delete(db.conn(), id)).await
+}
+
+#[tauri::command]
+pub async fn snippet_count(state: State<'_, AppState>) -> Result<i64, String> {
+    let db = state.db.clone();
+    db_call(db, move |db| noterust_db::snippets::count(db.conn())).await
+}
+
+// ---------------------------------------------------------------------------
 // Finance
 // ---------------------------------------------------------------------------
 
@@ -713,6 +792,25 @@ pub async fn set_default_editor(
     let exe = std::env::current_exe().map_err(|err| err.to_string())?;
     let _ = &state;
     blocking(move || crate::registry::set_default_editor(&exe, enabled)).await
+}
+
+/// Current shell-integration state, so the settings page reflects reality.
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ShellState {
+    pub default_editor: bool,
+    pub autostart: bool,
+}
+
+#[tauri::command]
+pub async fn shell_state() -> Result<ShellState, String> {
+    blocking(|| {
+        Ok(ShellState {
+            default_editor: crate::registry::default_editor_registered(),
+            autostart: crate::registry::autostart_enabled(),
+        })
+    })
+    .await
 }
 
 #[tauri::command]

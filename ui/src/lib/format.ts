@@ -7,8 +7,9 @@ const dateTime = new Intl.DateTimeFormat("ar-EG", {
 });
 
 const timeOnly = new Intl.DateTimeFormat("ar-EG", {
-  hour: "numeric",
+  hour: "2-digit",
   minute: "2-digit",
+  hour12: false,
 });
 
 const shortDate = new Intl.DateTimeFormat("ar-EG", {
@@ -186,6 +187,14 @@ export const NOUNS = {
     few: "{n} معاملات",
     many: "{n} معاملة",
     other: "{n} معاملة",
+  },
+  snippet: {
+    zero: "لا يوجد محفوظ",
+    one: "عنصر واحد",
+    two: "عنصران",
+    few: "{n} عناصر",
+    many: "{n} عنصراً",
+    other: "{n} عنصر",
   },
   day: {
     zero: "{n} يوم",

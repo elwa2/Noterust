@@ -10,7 +10,8 @@ pub mod text;
 pub use error::{CoreError, Result};
 pub use models::{
     Category, CategoryTotal, ChecklistItem, DayTotal, Folder, FolderSummary, MonthlySummary, Note,
-    NoteSummary, NoteVersion, SearchHit, SortBy, Tag, TaskItem, TextCounts, TransactionItem,
+    NoteSummary, NoteVersion, SearchHit, Snippet, SortBy, Tag, TaskItem, TextCounts,
+    TransactionItem,
 };
 pub use text::{
     arabic_datetime, counts, derive_title, detect_direction, extract_checklist,

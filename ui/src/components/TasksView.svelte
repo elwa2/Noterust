@@ -4,11 +4,15 @@
   import * as store from "../lib/store";
   import { arabicDigits, fromInputDate, NOUNS, plural, relativeDay, toInputDate } from "../lib/format";
   import Icon from "./Icon.svelte";
+  import DonutChart from "./DonutChart.svelte";
+  import BackButton from "./BackButton.svelte";
   import type { TaskItem } from "../lib/types";
+
+  type Filter = "open" | "today" | "overdue" | "done" | "all";
 
   let tasks: TaskItem[] = [];
   let loading = true;
-  let filter: "open" | "done" | "all" = "open";
+  let filter: Filter = "open";
 
   let title = "";
   let due = "";
@@ -17,14 +21,31 @@
   let adding = false;
   let error = "";
 
+  $: startOfToday = new Date(new Date().toDateString()).getTime();
+  $: openTasks = tasks.filter((task) => !task.isDone);
+  $: openCount = openTasks.length;
+  $: todayCount = openTasks.filter((task) => dueToday(task)).length;
+  $: overdueCount = openTasks.filter((task) => overdue(task)).length;
+  $: doneToday = tasks.filter(
+    (task) => task.isDone && (task.completedAt ?? 0) >= startOfToday,
+  ).length;
+
   $: visible =
     filter === "open"
-      ? tasks.filter((task) => !task.isDone)
-      : filter === "done"
-        ? tasks.filter((task) => task.isDone)
-        : tasks;
+      ? openTasks
+      : filter === "today"
+        ? openTasks.filter((task) => dueToday(task))
+        : filter === "overdue"
+          ? openTasks.filter((task) => overdue(task))
+          : filter === "done"
+            ? tasks.filter((task) => task.isDone)
+            : tasks;
 
-  $: openCount = tasks.filter((task) => !task.isDone).length;
+  $: prioritySegments = [
+    { key: "1", label: "مرتفعة", value: openTasks.filter((task) => task.priority === 1).length, color: "var(--danger)" },
+    { key: "2", label: "متوسطة", value: openTasks.filter((task) => task.priority === 2).length, color: "var(--accent)" },
+    { key: "3", label: "منخفضة", value: openTasks.filter((task) => task.priority === 3).length, color: "var(--success)" },
+  ];
 
   onMount(() => void load());
 
@@ -70,7 +91,14 @@
 
   async function toggle(task: TaskItem) {
     try {
-      await api.completeTask(task.id, !task.isDone);
+      const updated = await api.completeTask(task.id, !task.isDone);
+      if (!task.isDone && !updated.isDone) {
+        store.toast(
+          updated.dueAt
+            ? `مهمة متكررة — الموعد القادم ${relativeDay(updated.dueAt)}`
+            : "مهمة متكررة — تم تحديث موعدها",
+        );
+      }
       await load();
       await store.refreshCounts();
     } catch (err) {
@@ -100,6 +128,11 @@
     return task.dueAt < new Date(new Date().toDateString()).getTime();
   }
 
+  function dueToday(task: TaskItem): boolean {
+    if (task.isDone) return false;
+    return task.dueAt !== null && task.dueAt >= startOfToday && task.dueAt < startOfToday + 86_400_000;
+  }
+
   function dueLabel(task: TaskItem): string {
     if (!task.dueAt) return "";
     return relativeDay(task.dueAt);
@@ -119,6 +152,7 @@
 
 <section class="view-page">
   <header class="page-head">
+    <BackButton />
     <div>
       <h1>المهام</h1>
       <p class="muted">متابعة كل ما يجب إنجازه، بما فيها قوائم التحقق داخل الملاحظات.</p>
@@ -127,6 +161,55 @@
   </header>
 
   <div class="scroll content">
+    <div class="stats">
+      <div class="stat remaining">
+        <span class="stat-label"><Icon name="checklist" size={13} /> المتبقية</span>
+        <strong>{arabicDigits(openCount)}</strong>
+        <span class="stat-hint">{openCount === 0 ? "لا شيء متبقٍ" : "بانتظار الإنجاز"}</span>
+      </div>
+      <div class="stat">
+        <span class="stat-label"><Icon name="calendar" size={13} /> مستحقة اليوم</span>
+        <strong>{arabicDigits(todayCount)}</strong>
+        <span class="stat-hint">{todayCount === 0 ? "لا مهام اليوم" : "عليك إنجازها اليوم"}</span>
+      </div>
+      <div class="stat late">
+        <span class="stat-label"><Icon name="alert" size={13} /> المتأخرة</span>
+        <strong>{arabicDigits(overdueCount)}</strong>
+        <span class="stat-hint">{overdueCount === 0 ? "لا تأخير" : "تجاوزت موعدها"}</span>
+      </div>
+      <div class="stat done">
+        <span class="stat-label"><Icon name="check" size={13} /> أُنجزت اليوم</span>
+        <strong>{arabicDigits(doneToday)}</strong>
+        <span class="stat-hint">{plural(doneToday, { zero: "لم تنجز شيئاً اليوم", one: "مهمة واحدة", two: "مهمتان", few: "{n} مهام", many: "{n} مهمة", other: "{n} مهمة" })}</span>
+      </div>
+    </div>
+
+    {#if openCount > 0}
+      <div class="card overview">
+        <DonutChart
+          segments={prioritySegments}
+          centerLabel="مهمة مفتوحة"
+          centerValue={arabicDigits(openCount)}
+          size={132}
+          thickness={18}
+          emptyText="لا مهام مفتوحة"
+        />
+        <ul class="legend-list">
+          {#each prioritySegments as segment (segment.key)}
+            <li>
+              <span class="dot" style="background:{segment.color}"></span>
+              <span class="legend-name">{segment.label}</span>
+              <span class="legend-count">{arabicDigits(segment.value)}</span>
+            </li>
+          {/each}
+          <li class="legend-total">
+            <span class="legend-name">الإجمالي</span>
+            <span class="legend-count">{arabicDigits(openCount)}</span>
+          </li>
+        </ul>
+      </div>
+    {/if}
+
     <div class="card add-card">
       <div class="add-row">
         <input
@@ -156,7 +239,15 @@
     </div>
 
     <div class="filters">
-      <button class="chip" class:on={filter === "open"} on:click={() => (filter = "open")}>غير مكتملة</button>
+      <button class="chip" class:on={filter === "open"} on:click={() => (filter = "open")}>
+        غير مكتملة
+      </button>
+      <button class="chip" class:on={filter === "today"} on:click={() => (filter = "today")}>
+        اليوم
+      </button>
+      <button class="chip late" class:on={filter === "overdue"} on:click={() => (filter = "overdue")}>
+        متأخرة
+      </button>
       <button class="chip" class:on={filter === "done"} on:click={() => (filter = "done")}>مكتملة</button>
       <button class="chip" class:on={filter === "all"} on:click={() => (filter = "all")}>الكل</button>
       <span class="spacer"></span>
@@ -411,5 +502,98 @@
     margin: 8px 0 0;
     color: var(--danger);
     font-size: 0.8em;
+  }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+    gap: 10px;
+    margin-bottom: 12px;
+  }
+
+  .stat {
+    background: var(--bg-elevated);
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    padding: 12px 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+  }
+
+  .stat-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    font-size: 0.74em;
+    color: var(--text-faint);
+  }
+
+  .stat strong {
+    font-size: 1.3em;
+  }
+
+  .stat-hint {
+    font-size: 0.7em;
+    color: var(--text-faint);
+  }
+
+  .stat.remaining strong {
+    color: var(--accent);
+  }
+
+  .stat.late strong {
+    color: var(--danger);
+  }
+
+  .stat.done strong {
+    color: var(--success);
+  }
+
+  .overview {
+    display: flex;
+    align-items: center;
+    gap: 22px;
+    margin-bottom: 12px;
+    padding: 12px 18px;
+  }
+
+  .legend-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    flex: 1;
+    max-width: 320px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .legend-list li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 0.82em;
+  }
+
+  .legend-name {
+    flex: 1;
+  }
+
+  .legend-count {
+    font-weight: 600;
+    color: var(--text-muted);
+  }
+
+  .legend-total {
+    border-top: 1px solid var(--border);
+    padding-top: 8px;
+    color: var(--text-muted);
+  }
+
+  .chip.late.on {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: color-mix(in srgb, var(--danger) 14%, transparent);
   }
 </style>

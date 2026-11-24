@@ -43,8 +43,11 @@
   الملاحظات بين المجلدات، سلة محذوفات مع حذف نهائي تلقائي بعد ٣٠ يوماً (قابل للضبط).
 - **خصوصية**: قفل ملاحظة بكلمة مرور (AES-256-GCM + Argon2)، تاريخ إصدارات لكل ملاحظة.
 - **متابعة**: مهام مع تاريخ استحقاق وأولوية وتكرار، وقوائم التحقق داخل الملاحظات تظهر
-  تلقائياً في صفحة المهام؛ دخل ومصروفات مع ملخص شهري ومخطط عمودي ومخطط دائري
-  للفئات وتصدير CSV.
+  تلقائياً في صفحة المهام مع لوحة إحصاءات (المتبقية/اليوم/المتأخرة/أُنجزت اليوم)
+  ومخطط دائري حسب الأولوية؛ دخل ومصروفات مع أربع بطاقات (الدخل/المصروفات/الصافي/
+  معدل الادخار) ومخطط عمودي يومي ومخطط دائري للفئات وتصدير CSV.
+- **الأكواد والبرومبت**: تبويب مستقل لحفظ مقاطع الكود والبرومبتات مع نوع (كود/برومبت)،
+  لغة، وسوم، بحث فوري، تثبيت، ونسخ بضغطة واحدة.
 - **سلة محذوفات آمنة**: عرض للقراءة فقط مع عدّاد الأيام المتبقية، إفراغ دفعة واحدة،
   واسترجاع سريع مع زر «تراجع» في الإشعار بعد الحذف.
 - **بيانات آمنة**: WAL، نسخة احتياطية يومية تلقائية (آخر ١٤)، نسخ يدوية واستعادة،
@@ -147,7 +150,7 @@ cargo test --workspace
 # 3. فحص clippy
 cargo clippy --workspace --all-targets
 
-# 4. بناء نسخة التطوير
+# 4. بناء نسخة التطوير (تتصل بسيرفر Vite على المنفذ 1420)
 cargo build -p noterust
 
 # 5. تشغيلها
@@ -177,8 +180,11 @@ export PATH="$HOME/.cargo/bin:/c/msys64/ucrt64/bin:$PATH"
 ## 4) إنتاج الملف المحمول
 
 ```bash
-cargo build --release -p noterust
+cargo build --release -p noterust --features custom-protocol
 ```
+
+> ميزة `custom-protocol` إلزامية للنسخة النهائية: بدونها يبقى الـ exe يفتح
+> `http://localhost:1420` (صفحة "connection refused") بدل تحميل الواجهة المضمّنة.
 
 الناتج:
 
@@ -277,7 +283,8 @@ search_title, search_body)` ·
 `tasks(id, note_id, title, description, due_at, priority, is_done, repeat_rule,
 created_at, completed_at)` · `transactions(id, kind, amount, currency, category_id, note,
 occurred_at)` · `categories(id, name, kind, color)` · `settings(key, value)` ·
-`attachments(id, note_id, filename, mime, path)`.
+`attachments(id, note_id, filename, mime, path)` ·
+`snippets(id, title, kind, language, content, tags, is_pinned, created_at, updated_at)`.
 
 الترحيلات تُدار بـ `rusqlite_migration` وتُنفَّذ تلقائياً عند أول تشغيل.
 
@@ -292,8 +299,9 @@ occurred_at)` · `categories(id, name, kind, color)` · `settings(key, value)` �
 | `Ctrl+Tab` | التبديل بين التبويبات |
 | `Ctrl+F` / `Ctrl+H` | بحث / استبدال |
 | `Ctrl+Shift+F` | بحث في كل الملاحظات |
-| `Ctrl+1 / Ctrl+2 / Ctrl+3` | الملاحظات / المهام / الدخل والمصروفات |
+| `Ctrl+1 / 2 / 3 / 4` | الملاحظات / المهام / الدخل والمصروفات / الأكواد والبرومبت |
 | `Ctrl+B` | إظهار أو إخفاء الشريط الجانبي |
+| `Esc` | رجوع إلى الملاحظات (من المهام/المالية/الأكواد/الإعدادات) |
 | `F1` | دليل الاستخدام |
 | `Ctrl+P` | لوحة الأوامر |
 | `Ctrl+G` | الذهاب إلى سطر |

@@ -13,6 +13,7 @@ import type {
   NoteVersion,
   OpenedFile,
   SearchHit,
+  Snippet,
   Tag,
   TaskItem,
   TransactionItem,
@@ -33,6 +34,14 @@ export interface TaskDraft {
   dueAt?: number | null;
   priority?: number;
   repeatRule?: string | null;
+}
+
+export interface SnippetDraft {
+  title: string;
+  kind: "code" | "prompt";
+  language: string;
+  content: string;
+  tags: string;
 }
 
 export interface TransactionDraft {
@@ -108,6 +117,23 @@ export const api = {
   completeTask: (id: number, done: boolean) => call<TaskItem>("complete_task", { id, done }),
   deleteTask: (id: number) => call<void>("delete_task", { id }),
 
+  listSnippets: (query?: string, kind?: string) =>
+    call<Snippet[]>("list_snippets", { query: query ?? null, kind: kind ?? null }),
+  createSnippet: (draft: SnippetDraft) => call<Snippet>("create_snippet", { draft }),
+  updateSnippet: (
+    id: number,
+    changes: {
+      title?: string;
+      kind?: "code" | "prompt";
+      language?: string;
+      content?: string;
+      tags?: string;
+      pinned?: boolean;
+    },
+  ) => call<Snippet>("update_snippet", { id, patch: changes }),
+  deleteSnippet: (id: number) => call<void>("delete_snippet", { id }),
+  snippetCount: () => call<number>("snippet_count"),
+
   listCategories: () => call<Category[]>("list_categories"),
   createCategory: (name: string, kind: string, color?: string) =>
     call<Category>("create_category", { name, kind, color }),
@@ -126,6 +152,7 @@ export const api = {
   openDataFolder: () => call<void>("open_data_folder"),
   setDefaultEditor: (enabled: boolean) => call<string>("set_default_editor", { enabled }),
   setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),
+  shellState: () => call<{ defaultEditor: boolean; autostart: boolean }>("shell_state"),
 
   backupNow: () => call<string>("backup_now"),
   listBackups: () => call<BackupEntry[]>("list_backups"),

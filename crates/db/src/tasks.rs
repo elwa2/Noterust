@@ -135,9 +135,41 @@ pub fn update(
     get(conn, id)
 }
 
+/// Next occurrence of a repeating task, advanced past `now` in whole steps.
+fn next_due(due: i64, rule: &str) -> Option<i64> {
+    let now = now_millis();
+    let mut at = due;
+    let mut guard = 0;
+    while at <= now && guard < 500 {
+        let dt = chrono::DateTime::from_timestamp_millis(at)?.with_timezone(&chrono::Local);
+        let next = match rule {
+            "daily" => dt.checked_add_days(chrono::Days::new(1)),
+            "weekly" => dt.checked_add_days(chrono::Days::new(7)),
+            "monthly" => dt.checked_add_months(chrono::Months::new(1)),
+            "yearly" => dt.checked_add_months(chrono::Months::new(12)),
+            _ => return None,
+        }?;
+        at = next.timestamp_millis();
+        guard += 1;
+    }
+    (at > now).then_some(at)
+}
+
 pub fn set_done(conn: &Connection, id: i64, done: bool) -> Result<TaskItem> {
-    let completed_at = if done { Some(now_millis()) } else { None };
     let task = get(conn, id)?;
+    // Completing a recurring task rolls it forward instead of closing it.
+    if done && !task.from_checklist {
+        if let (Some(rule), Some(due)) = (task.repeat_rule.as_deref(), task.due_at) {
+            if let Some(next) = next_due(due, rule) {
+                conn.execute(
+                    "UPDATE tasks SET due_at = ?1, is_done = 0, completed_at = ?2 WHERE id = ?3",
+                    params![next, Some(now_millis()), id],
+                )?;
+                return get(conn, id);
+            }
+        }
+    }
+    let completed_at = if done { Some(now_millis()) } else { None };
     conn.execute(
         "UPDATE tasks SET is_done = ?1, completed_at = ?2 WHERE id = ?3",
         params![done as i64, completed_at, id],
@@ -318,6 +350,29 @@ mod tests {
         assert_eq!(updated.priority, 1);
         delete(db.conn(), task.id).expect("delete");
         assert!(get(db.conn(), task.id).is_err());
+    }
+
+    #[test]
+    fn completing_a_recurring_task_moves_it_forward() {
+        let db = Db::open_in_memory().expect("db");
+        let due = crate::finance::month_range(2026, 11).0;
+        let mut draft = draft("تمرين");
+        draft.due_at = Some(due);
+        draft.repeat_rule = Some("daily".to_string());
+        let task = create(db.conn(), &draft).expect("create");
+        let after = set_done(db.conn(), task.id, true).expect("done");
+        assert!(!after.is_done, "recurring task stays open");
+        assert!(after.due_at.expect("due") > now_millis());
+    }
+
+    #[test]
+    fn completing_a_plain_task_closes_it() {
+        let db = Db::open_in_memory().expect("db");
+        let mut draft = draft("عادية");
+        draft.due_at = Some(crate::finance::month_range(2026, 11).0);
+        let task = create(db.conn(), &draft).expect("create");
+        let after = set_done(db.conn(), task.id, true).expect("done");
+        assert!(after.is_done);
     }
 
     #[test]

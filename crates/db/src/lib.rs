@@ -12,6 +12,7 @@ pub mod folders;
 pub mod migrations;
 pub mod notes;
 pub mod settings;
+pub mod snippets;
 pub mod tags;
 pub mod tasks;
 pub mod versions;
@@ -22,8 +23,8 @@ use rusqlite::Connection;
 use thiserror::Error;
 
 pub use noterust_core::{
-    Category, MonthlySummary, Note, NoteSummary, NoteVersion, SearchHit, SortBy, Tag, TaskItem,
-    TransactionItem,
+    Category, MonthlySummary, Note, NoteSummary, NoteVersion, SearchHit, Snippet, SortBy, Tag,
+    TaskItem, TransactionItem,
 };
 
 /// Errors surfaced by the persistence layer.

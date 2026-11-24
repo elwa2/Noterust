@@ -2,7 +2,7 @@ import { derived, get, writable } from "svelte/store";
 import { api } from "./api";
 import type { Counts, FolderNode, Note, NoteSummary, SearchHit } from "./types";
 
-export type View = "notes" | "tasks" | "finance" | "settings" | "trash";
+export type View = "notes" | "tasks" | "finance" | "snippets" | "settings" | "trash";
 
 export const folders = writable<FolderNode[]>([]);
 export const notes = writable<(NoteSummary | SearchHit)[]>([]);

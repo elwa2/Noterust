@@ -134,6 +134,10 @@
         <span class="icon"><Icon name="finance" /></span>
         <span class="label">الدخل والمصروفات</span>
       </button>
+      <button class="item" class:active={$view === "snippets"} on:click={() => store.setView("snippets")}>
+        <span class="icon"><Icon name="code" /></span>
+        <span class="label">الأكواد والبرومبت</span>
+      </button>
     </section>
   </div>
 

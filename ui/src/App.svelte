@@ -19,6 +19,7 @@
   import Editor from "./components/Editor.svelte";
   import TasksView from "./components/TasksView.svelte";
   import FinanceView from "./components/FinanceView.svelte";
+  import SnippetsView from "./components/SnippetsView.svelte";
   import SettingsView from "./components/SettingsView.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
   import HelpDialog from "./components/HelpDialog.svelte";
@@ -195,9 +196,11 @@
       toggleSidebar();
       return;
     }
-    if (ctrl && (event.key === "1" || event.key === "2" || event.key === "3") && !event.shiftKey) {
+    if (ctrl && ["1", "2", "3", "4"].includes(event.key) && !event.shiftKey) {
       event.preventDefault();
-      void store.setView((["notes", "tasks", "finance"] as const)[Number(event.key) - 1]);
+      void store.setView(
+        (["notes", "tasks", "finance", "snippets"] as const)[Number(event.key) - 1],
+      );
       return;
     }
     if (ctrl && event.shiftKey && key === "f") {
@@ -279,6 +282,7 @@
     if (event.key === "Escape") {
       paletteOpen = false;
       helpOpen = false;
+      if ($view !== "notes" && $view !== "trash") void store.setView("notes");
     }
   }
 
@@ -365,6 +369,8 @@
     <TasksView />
   {:else if $view === "finance"}
     <FinanceView />
+  {:else if $view === "snippets"}
+    <SnippetsView />
   {:else if $view === "settings"}
     <SettingsView />
   {/if}

@@ -168,9 +168,25 @@ CREATE TABLE attachments (
 CREATE INDEX idx_attachments_note ON attachments(note_id);
 "#;
 
+/// Saved code snippets and prompts.
+const SCHEMA_V3: &str = r#"
+CREATE TABLE snippets (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    title      TEXT    NOT NULL DEFAULT '',
+    kind       TEXT    NOT NULL DEFAULT 'code' CHECK (kind IN ('code', 'prompt')),
+    language   TEXT    NOT NULL DEFAULT '',
+    content    TEXT    NOT NULL DEFAULT '',
+    tags       TEXT    NOT NULL DEFAULT '',
+    is_pinned  INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_snippets_kind ON snippets(kind, updated_at DESC);
+"#;
+
 /// All migrations, oldest first.
 pub fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(SCHEMA_V1), M::up(SCHEMA_V2)])
+    Migrations::new(vec![M::up(SCHEMA_V1), M::up(SCHEMA_V2), M::up(SCHEMA_V3)])
 }
 
 /// Brings `conn` up to the latest schema version.
@@ -199,6 +215,7 @@ mod tests {
             "categories",
             "settings",
             "attachments",
+            "snippets",
         ] {
             let found: i64 = conn
                 .query_row(

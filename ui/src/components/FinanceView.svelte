@@ -14,6 +14,7 @@
   } from "../lib/format";
   import { settings } from "../lib/store";
   import DonutChart from "./DonutChart.svelte";
+  import BackButton from "./BackButton.svelte";
   import Icon from "./Icon.svelte";
   import type { Category, MonthlySummary, TransactionItem } from "../lib/types";
 
@@ -56,6 +57,17 @@
     1,
     ...(summary?.byDay ?? []).map((day) => Math.max(day.incomeMinor, day.expenseMinor)),
   );
+  $: savingsRate =
+    summary && summary.incomeMinor > 0
+      ? Math.round((summary.balanceMinor / summary.incomeMinor) * 100)
+      : null;
+  $: topExpense =
+    (summary?.byCategory ?? [])
+      .filter((row) => row.kind === "expense")
+      .sort((a, b) => b.totalMinor - a.totalMinor)[0] ?? null;
+  $: activeDays = new Set((summary?.byDay ?? []).map((day) => day.day)).size;
+  $: incomeCategories = (summary?.byCategory ?? []).filter((row) => row.kind === "income").length;
+  $: expenseCategories = (summary?.byCategory ?? []).filter((row) => row.kind === "expense").length;
 
   onMount(() => void load());
 
@@ -150,6 +162,7 @@
 
 <section class="view-page">
   <header class="page-head">
+    <BackButton />
     <div>
       <h1>الدخل والمصروفات</h1>
       <p class="muted">سجّل معاملاتك وتابع ملخص الشهر بالجنيه المصري.</p>
@@ -167,20 +180,47 @@
     {:else if summary}
       <div class="cards">
         <div class="stat income">
-          <span class="stat-label">الدخل</span>
+          <span class="stat-label"><Icon name="importIcon" size={13} /> الدخل</span>
           <strong>{money(summary.incomeMinor, currency)}</strong>
+          <span class="stat-hint">
+            {plural(incomeCategories, {
+              zero: "لا توجد فئات دخل",
+              one: "فئة واحدة",
+              two: "فئتان",
+              few: "{n} فئات",
+              many: "{n} فئة",
+              other: "{n} فئة",
+            })}
+          </span>
         </div>
         <div class="stat expense">
-          <span class="stat-label">المصروفات</span>
+          <span class="stat-label"><Icon name="exportIcon" size={13} /> المصروفات</span>
           <strong>{money(summary.expenseMinor, currency)}</strong>
+          <span class="stat-hint">
+            {plural(expenseCategories, {
+              zero: "لا توجد فئات مصروفات",
+              one: "فئة واحدة",
+              two: "فئتان",
+              few: "{n} فئات",
+              many: "{n} فئة",
+              other: "{n} فئة",
+            })}
+          </span>
         </div>
         <div class="stat" class:negative={summary.balanceMinor < 0}>
-          <span class="stat-label">الرصيد</span>
+          <span class="stat-label"><Icon name="wallet" size={13} /> الصافي</span>
           <strong>{money(summary.balanceMinor, currency)}</strong>
+          <span class="stat-hint">
+            {summary.balanceMinor < 0 ? "الشهر منتهٍ بعجز" : "دخل ناقص مصروفات"}
+          </span>
         </div>
-        <button class="btn" on:click={exportCsv}>
-          <Icon name="exportIcon" size={15} /> تصدير CSV
-        </button>
+        <div class="stat" class:negative={(savingsRate ?? 0) < 0}>
+          <span class="stat-label"><Icon name="sparkle" size={13} /> معدل الادخار</span>
+          <strong>{savingsRate === null ? "—" : `${arabicDigits(savingsRate)}٪`}</strong>
+          <span class="stat-hint">
+            {savingsRate === null ? "لا يوجد دخل هذا الشهر" : "من إجمالي الدخل"}
+          </span>
+        </div>
       </div>
 
       <div class="grid">
@@ -208,7 +248,14 @@
         </div>
 
         <div class="card">
-          <h3>حسب الفئة</h3>
+          <div class="card-head">
+            <h3>حسب الفئة</h3>
+            {#if topExpense}
+              <span class="top-cat" title="أكبر فئة مصروفات">
+                الأعلى: {topExpense.name} · {money(topExpense.totalMinor, currency)}
+              </span>
+            {/if}
+          </div>
           {#if summary.byCategory.length === 0}
             <p class="faint">لا بيانات بعد.</p>
           {:else}
@@ -280,13 +327,19 @@
       </div>
 
       <div class="card">
-        <div class="list-head">
+                  <div class="list-head">
           <h3>المعاملات</h3>
+          <span class="faint tx-count">
+            {activeDays === 0 ? "لا أيام نشطة" : `${arabicDigits(activeDays)} يوم نشط`}
+          </span>
           <select bind:value={kindFilter} on:change={() => load()}>
             <option value="">الكل</option>
             <option value="income">دخل</option>
             <option value="expense">مصروف</option>
           </select>
+          <button class="btn ghost small" on:click={exportCsv}>
+            <Icon name="exportIcon" size={14} /> CSV
+          </button>
         </div>
 
         {#if transactions.length === 0}
@@ -391,6 +444,40 @@
 
   .stat strong {
     font-size: 1.15em;
+  }
+
+  .stat-label {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+
+  .stat-hint {
+    font-size: 0.7em;
+    color: var(--text-faint);
+  }
+
+  .card-head {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    flex-wrap: wrap;
+    margin-bottom: 12px;
+  }
+
+  .card-head h3 {
+    margin: 0;
+  }
+
+  .top-cat {
+    font-size: 0.74em;
+    color: var(--text-faint);
+    margin-inline-start: auto;
+  }
+
+  .btn.ghost.small {
+    font-size: 0.78em;
+    padding: 4px 10px;
   }
 
   .stat.income strong {

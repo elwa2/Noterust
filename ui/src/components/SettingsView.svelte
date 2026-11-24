@@ -3,7 +3,8 @@
   import { api } from "../lib/api";
   import * as store from "../lib/store";
   import { settings } from "../lib/store";
-  import { arabicDigits, arabicDateTime, CURRENCIES, fileSize } from "../lib/format";
+  import { arabicDigits, arabicDateTime, CURRENCIES, fileSize, NOUNS, plural } from "../lib/format";
+  import BackButton from "./BackButton.svelte";
   import type { BackupEntry, DataInfo } from "../lib/types";
 
   let info: DataInfo | null = null;
@@ -23,8 +24,18 @@
   $: currency = $settings["default_currency"] ?? "EGP";
 
   onMount(async () => {
-    await loadInfo();
+    await Promise.all([loadInfo(), loadShellState()]);
   });
+
+  async function loadShellState() {
+    try {
+      const state = await api.shellState();
+      defaultEditor = state.defaultEditor;
+      autostart = state.autostart;
+    } catch {
+      /* registry unreadable: keep the toggles off */
+    }
+  }
 
   async function loadInfo() {
     try {
@@ -41,6 +52,15 @@
 
   async function applyFontSize() {
     await save("font_size", String(fontSize));
+  }
+
+  /** Number inputs: clamp into range and write the clamped value back to the field. */
+  async function clampSave(event: Event, key: string, min: number, max: number) {
+    const input = event.currentTarget as HTMLInputElement;
+    const parsed = Number.parseInt(input.value, 10);
+    const value = Number.isFinite(parsed) ? Math.min(max, Math.max(min, parsed)) : min;
+    input.value = String(value);
+    await save(key, String(value));
   }
 
   async function backupNow() {
@@ -89,7 +109,16 @@
     try {
       const stats = await api.importJsonFile();
       if (stats) {
-        store.toast(`استُوردت ${arabicDigits(stats.notes)} ملاحظة و${arabicDigits(stats.folders)} مجلد`);
+        store.toast(
+          `تم الاستيراد: ${plural(stats.notes, NOUNS.note)} و${plural(stats.folders, {
+            zero: "لا مجلدات",
+            one: "مجلد واحد",
+            two: "مجلدان",
+            few: "{n} مجلدات",
+            many: "{n} مجلداً",
+            other: "{n} مجلد",
+          })}`,
+        );
         await store.refreshAll();
       }
     } catch (error) {
@@ -170,6 +199,7 @@
 
 <section class="view-page">
   <header class="page-head">
+    <BackButton />
     <div>
       <h1>الإعدادات</h1>
       <p class="muted">المظهر، النسخ الاحتياطي، البيانات والاختصارات.</p>
@@ -241,7 +271,7 @@
         </div>
 
         <div class="card">
-          <h3>المحرر</h3>
+          <h3>الاحتفاظ والنسخ</h3>
           <div class="row-field">
             <label for="trash-days">الاحتفاظ بالمحذوفات (أيام)</label>
             <input
@@ -250,7 +280,7 @@
               min="1"
               max="365"
               value={retention}
-              on:change={(event) => save("trash_retention_days", (event.currentTarget as HTMLInputElement).value)}
+              on:change={(event) => clampSave(event, "trash_retention_days", 1, 365)}
             />
           </div>
           <div class="row-field">
@@ -261,7 +291,7 @@
               min="1"
               max="90"
               value={backupRetention}
-              on:change={(event) => save("backup_retention", (event.currentTarget as HTMLInputElement).value)}
+              on:change={(event) => clampSave(event, "backup_retention", 1, 90)}
             />
           </div>
         </div>

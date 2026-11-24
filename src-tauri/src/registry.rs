@@ -115,6 +115,27 @@ pub fn set_autostart(exe: &Path, enabled: bool) -> Result<(), String> {
     }
 }
 
+/// Whether the app is currently registered in the "Open with" list for text files.
+pub fn default_editor_registered() -> bool {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(
+            format!("Software\\Classes\\{PROG_ID}\\shell\\open\\command"),
+            KEY_READ,
+        )
+        .and_then(|key| key.get_value::<String, _>(""))
+        .is_ok()
+}
+
+/// Whether the start-with-Windows entry exists.
+pub fn autostart_enabled() -> bool {
+    hkcu()
+        .and_then(|software| {
+            software.open_subkey_with_flags("Microsoft\\Windows\\CurrentVersion\\Run", KEY_READ)
+        })
+        .and_then(|key| key.get_value::<String, _>(APP_NAME))
+        .is_ok()
+}
+
 /// True when the WebView2 runtime is installed (Windows 10/11 usually have it).
 pub fn webview2_installed() -> bool {
     const GUIDE: &str = "Microsoft\\EdgeUpdate\\Clients\\{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";

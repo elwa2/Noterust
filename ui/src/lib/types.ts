@@ -83,6 +83,18 @@ export interface TaskItem {
   fromChecklist: boolean;
 }
 
+export interface Snippet {
+  id: number;
+  title: string;
+  kind: "code" | "prompt";
+  language: string;
+  content: string;
+  tags: string;
+  isPinned: boolean;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface Category {
   id: number;
   name: string;

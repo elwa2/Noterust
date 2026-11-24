@@ -31,3 +31,6 @@ webview2-com-sys = "0.39"
 
 [features]
 default = []
+# Embeds ../ui/dist into the binary instead of pointing at the dev server.
+# Required for any release build: cargo build --release -p noterust --features custom-protocol
+custom-protocol = ["tauri/custom-protocol"]

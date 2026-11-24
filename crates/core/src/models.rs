@@ -136,6 +136,23 @@ pub struct TaskItem {
     pub from_checklist: bool,
 }
 
+/// A saved code snippet or prompt.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Snippet {
+    pub id: i64,
+    pub title: String,
+    /// `code` or `prompt`.
+    pub kind: String,
+    pub language: String,
+    pub content: String,
+    /// Free-form comma separated tags.
+    pub tags: String,
+    pub is_pinned: bool,
+    pub created_at: i64,
+    pub updated_at: i64,
+}
+
 /// A income/expense transaction. `amount_minor` is in piastres.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
