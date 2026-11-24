@@ -308,10 +308,13 @@
 
 <style>
   .view-page {
-    grid-column: 2 / -1;
+    grid-column: 3 / -1;
+    grid-row: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     background: var(--bg);
   }
 
@@ -335,7 +338,8 @@
 
   .content {
     flex: 1;
-    padding: 18px 26px 40px;
+    min-height: 0;
+    padding: 18px 26px 30px;
     overflow-y: auto;
   }
 

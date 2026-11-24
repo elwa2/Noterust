@@ -8,6 +8,7 @@ export type EditorCommand =
   | "duplicate-line"
   | "insert-date"
   | "toggle-wrap"
+  | "toggle-preview"
   | "save"
   | "save-as"
   | "focus";

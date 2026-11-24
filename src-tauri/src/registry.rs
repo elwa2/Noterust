@@ -65,10 +65,67 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
         }
         if let Ok((app_key, _)) = classes.create_subkey(format!("Applications\\{}.exe", APP_NAME)) {
             let _ = app_key.set_value("FriendlyAppName", &APP_NAME);
+            if let Ok((types, _)) = app_key.create_subkey("SupportedTypes") {
+                for ext in EXTENSIONS {
+                    let _ = types.set_value(format!(".{ext}"), &"");
+                }
+            }
+        }
+
+        // "Set defaults for applications" entry (Windows 10/11 Settings).
+        if let Ok((caps, _)) =
+            RegKey::predef(HKEY_CURRENT_USER).create_subkey("Software\\NoteRust\\Capabilities")
+        {
+            let _ = caps.set_value("ApplicationName", &APP_NAME);
+            let _ = caps.set_value("ApplicationDescription", &"تطبيق ملاحظات عربي سريع وخفيف");
+            if let Ok((assoc, _)) = caps.create_subkey("FileAssociations") {
+                for ext in EXTENSIONS {
+                    let _ = assoc.set_value(format!(".{ext}"), &PROG_ID);
+                }
+            }
+        }
+        if let Ok(registered) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags("Software\\RegisteredApplications", KEY_WRITE | KEY_READ)
+            .or_else(|_| {
+                RegKey::predef(HKEY_CURRENT_USER)
+                    .create_subkey("Software\\RegisteredApplications")
+                    .map(|(key, _)| key)
+            })
+        {
+            let _ = registered.set_value(APP_NAME, &"Software\\NoteRust\\Capabilities");
+        }
+
+        // Right-click verb in Explorer for every file type.
+        if let Ok((verb, _)) = classes.create_subkey("*\\shell\\NoteRust") {
+            let _ = verb.set_value("", &"فتح باستخدام NoteRust");
+            let _ = verb.set_value("Icon", &format!("\"{exe}\",0"));
+            if let Ok((verb_cmd, _)) = verb.create_subkey("command") {
+                let _ = verb_cmd.set_value("", &command);
+            }
+        }
+
+        // Best effort: when Windows never stored a user choice, point the extension
+        // itself at our ProgID so a double click opens NoteRust directly.
+        for ext in EXTENSIONS {
+            let user_choice = RegKey::predef(HKEY_CURRENT_USER)
+                .open_subkey_with_flags(
+                    format!(
+                        "Software\\Microsoft\\Windows\\CurrentVersion\\Explorer\\FileExts\\.{ext}\\UserChoice"
+                    ),
+                    KEY_READ,
+                )
+                .is_ok();
+            if !user_choice {
+                if let Ok((key, _)) = classes.create_subkey(format!(".{ext}")) {
+                    let _ = key.set_value("", &PROG_ID);
+                }
+            }
         }
 
         Ok(
-            "تم تسجيل NoteRust كمحرر متاح. لتعيينه كافتراضي افتح: الإعدادات ← التطبيقات ← التطبيقات الافتراضية ← .txt"
+            "تم تسجيل NoteRust لملفات txt / log / md / csv، وأُضيف إلى قائمة «فتح باستخدام». \n\
+             ليصبح الافتراضي: افتح إعدادات ويندوز ← التطبيقات ← التطبيقات الافتراضية ← NoteRust ← اختر .txt. \n\
+             وإن ظهرت نافذة «كيف تريد فتح هذا الملف؟» اختر NoteRust وعلّم «دائماً»."
                 .to_string(),
         )
     } else {
@@ -77,6 +134,17 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
             .map_err(|err| err.to_string())?;
         let _ = classes.delete_subkey_all(PROG_ID);
         let _ = classes.delete_subkey_all(format!("Applications\\{}.exe", APP_NAME));
+        let _ = classes.delete_subkey_all("*\\shell\\NoteRust");
+        if let Ok(registered) = RegKey::predef(HKEY_CURRENT_USER)
+            .open_subkey_with_flags("Software\\RegisteredApplications", KEY_WRITE)
+        {
+            let _ = registered.delete_value(APP_NAME);
+        }
+        if let Ok(software) =
+            RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software", KEY_WRITE)
+        {
+            let _ = software.delete_subkey_all("NoteRust");
+        }
         for ext in EXTENSIONS {
             if let Ok(key) =
                 classes.open_subkey_with_flags(format!(".{ext}\\OpenWithProgids"), KEY_WRITE)
@@ -113,6 +181,15 @@ pub fn set_autostart(exe: &Path, enabled: bool) -> Result<(), String> {
             Err(err) => Err(err.to_string()),
         }
     }
+}
+
+/// Opens the Windows "Default apps" settings page so the user can confirm NoteRust.
+pub fn open_default_apps_page() -> Result<(), String> {
+    std::process::Command::new("cmd")
+        .args(["/C", "start", "", "ms-settings:defaultapps"])
+        .spawn()
+        .map(|_| ())
+        .map_err(|err| err.to_string())
 }
 
 /// Whether the app is currently registered in the "Open with" list for text files.

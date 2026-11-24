@@ -23,10 +23,12 @@
   import SettingsView from "./components/SettingsView.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
   import HelpDialog from "./components/HelpDialog.svelte";
+  import CalculatorDialog from "./components/CalculatorDialog.svelte";
   import Icon from "./components/Icon.svelte";
 
   let paletteOpen = false;
   let helpOpen = false;
+  let calcOpen = false;
   let themeMedia: MediaQueryList | null = null;
 
   let sidebarHidden = false;
@@ -121,8 +123,12 @@
     const onKeydown = (event: KeyboardEvent) => handleShortcut(event);
     window.addEventListener("keydown", onKeydown);
 
+    const openCalc = () => (calcOpen = true);
+    window.addEventListener("noterust:calc", openCalc);
+
     return () => {
       window.removeEventListener("keydown", onKeydown);
+      window.removeEventListener("noterust:calc", openCalc);
       themeMedia?.removeEventListener("change", applyTheme);
       for (const pending of unlisteners) {
         void pending.then((unlisten) => unlisten());
@@ -219,6 +225,11 @@
       window.dispatchEvent(new CustomEvent("noterust:new-folder"));
       return;
     }
+    if (ctrl && event.shiftKey && key === "c") {
+      event.preventDefault();
+      calcOpen = true;
+      return;
+    }
     if (ctrl && key === "n") {
       event.preventDefault();
       void store.createNote();
@@ -247,6 +258,11 @@
     if (ctrl && key === "s") {
       event.preventDefault();
       sendEditorCommand(event.shiftKey ? "save-as" : "save");
+      return;
+    }
+    if (ctrl && key === "e" && notesMode) {
+      event.preventDefault();
+      sendEditorCommand("toggle-preview");
       return;
     }
     if (ctrl && key === "f") {
@@ -280,6 +296,10 @@
       return;
     }
     if (event.key === "Escape") {
+      if (calcOpen) {
+        calcOpen = false;
+        return;
+      }
       paletteOpen = false;
       helpOpen = false;
       if ($view !== "notes" && $view !== "trash") void store.setView("notes");
@@ -404,6 +424,10 @@
   <HelpDialog on:close={() => (helpOpen = false)} />
 {/if}
 
+{#if calcOpen}
+  <CalculatorDialog on:close={() => (calcOpen = false)} />
+{/if}
+
 <div class="toasts">
   {#each $toasts as item (item.id)}
     <div class="toast" class:error={item.kind === "error"}>
@@ -426,6 +450,7 @@
   .app {
     display: grid;
     grid-template-columns: var(--sidebar-w) 6px var(--list-w) 6px 1fr;
+    grid-template-rows: 100%;
     height: 100vh;
     overflow: hidden;
     background: var(--bg);
@@ -434,7 +459,13 @@
   }
 
   .app:not(.notes-mode) {
-    grid-template-columns: var(--sidebar-w) 0 0 0 1fr;
+    grid-template-columns: var(--sidebar-w) 6px 0 0 1fr;
+  }
+
+  /* One row only: every pane stays beside the sidebar instead of wrapping below it. */
+  .app > :global(*) {
+    grid-row: 1;
+    min-height: 0;
   }
 
   .app.sidebar-hidden {

@@ -803,6 +803,11 @@ pub struct ShellState {
 }
 
 #[tauri::command]
+pub async fn open_default_apps() -> Result<(), String> {
+    blocking(crate::registry::open_default_apps_page).await
+}
+
+#[tauri::command]
 pub async fn shell_state() -> Result<ShellState, String> {
     blocking(|| {
         Ok(ShellState {

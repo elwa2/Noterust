@@ -13,6 +13,7 @@
     fileChangeNotice,
   } from "../lib/store";
   import { arabicDateTime, NOUNS, plural } from "../lib/format";
+  import { renderMarkdown } from "../lib/markdown";
   import { editorCommand } from "../lib/bus";
   import type { EditorCommand } from "../lib/bus";
   import type { Note } from "../lib/types";
@@ -56,6 +57,8 @@
 
   let moreOpen = false;
   let formatOpen = false;
+  /** Rendered Markdown preview instead of the raw textarea. */
+  let preview = false;
   let colorOpen = false;
 
   let lockMode: "lock" | "remove" | null = null;
@@ -76,6 +79,7 @@
   $: sessionPassword = note ? (passwords[note.id] ?? null) : null;
   $: lockedView = !!note && note.isLocked && !sessionPassword;
   $: matches = computeMatches();
+  $: previewHtml = preview ? renderMarkdown(content) : "";
   $: externalChanged = !!note && $fileChangeNotice === note.id;
   $: trashed = !!note?.deletedAt;
   $: trashDaysLeft = note?.deletedAt
@@ -757,6 +761,9 @@
       case "toggle-wrap":
         void toggleWrap();
         break;
+      case "toggle-preview":
+        togglePreview();
+        break;
       case "save":
         void saveNow();
         break;
@@ -773,6 +780,12 @@
     moreOpen = false;
     formatOpen = false;
     colorOpen = false;
+  }
+
+  function togglePreview() {
+    preview = !preview;
+    closePopovers();
+    if (!preview) void tick().then(() => textarea?.focus());
   }
 </script>
 
@@ -867,6 +880,13 @@
           </div>
         {/if}
       </div>
+      <button
+        class="icon-btn"
+        class:active={preview}
+        title={preview ? "تحرير النص (Ctrl+E)" : "معاينة Markdown منسّقة (Ctrl+E)"}
+        on:click={togglePreview}
+        >{preview ? "✎" : "👁"}</button
+      >
       <button
         class="icon-btn"
         title={note.isLocked ? "إدارة القفل" : "قفل الملاحظة"}
@@ -980,24 +1000,34 @@
       {/if}
 
       <div class="body">
-        <textarea
-          bind:this={textarea}
-          class="text"
-          class:nowrap={!wrap}
-          value={content}
-          dir={directionAttr}
-          wrap={wrap ? "soft" : "off"}
-          spellcheck="false"
-          readonly={trashed}
-          placeholder="اكتب، أو اضغط «/» لإدراج عنصر"
-          on:input={onTextareaInput}
-          on:keydown={onTextareaKeydown}
-          on:wheel={onWheel}
-          on:blur={() => dirty && void saveNow()}
-        ></textarea>
+        {#if preview}
+          <div class="reader scroll" dir={directionAttr}>
+            {#if content.trim()}
+              {@html previewHtml}
+            {:else}
+              <p class="faint">لا يوجد نص للمعاينة بعد.</p>
+            {/if}
+          </div>
+        {:else}
+          <textarea
+            bind:this={textarea}
+            class="text"
+            class:nowrap={!wrap}
+            value={content}
+            dir={directionAttr}
+            wrap={wrap ? "soft" : "off"}
+            spellcheck="false"
+            readonly={trashed}
+            placeholder="اكتب، أو اضغط «/» لإدراج عنصر"
+            on:input={onTextareaInput}
+            on:keydown={onTextareaKeydown}
+            on:wheel={onWheel}
+            on:blur={() => dirty && void saveNow()}
+          ></textarea>
 
-        {#if slashOpen}
-          <SlashMenu query={slashQuery} top={slashPos.top} left={slashPos.left} on:choose={chooseSlash} />
+          {#if slashOpen}
+            <SlashMenu query={slashQuery} top={slashPos.top} left={slashPos.left} on:choose={chooseSlash} />
+          {/if}
         {/if}
       </div>
 
@@ -1359,6 +1389,185 @@
     position: relative;
     display: flex;
     min-height: 0;
+  }
+
+  /* Rendered Markdown preview */
+  .reader {
+    flex: 1;
+    min-height: 0;
+    padding: 24px 34px 70px;
+    background: var(--bg);
+    line-height: 1.95;
+    font-size: 1.02em;
+    overflow-wrap: anywhere;
+  }
+
+  .reader :global(h1),
+  .reader :global(h2),
+  .reader :global(h3),
+  .reader :global(h4),
+  .reader :global(h5),
+  .reader :global(h6) {
+    margin: 1.4em 0 0.5em;
+    line-height: 1.5;
+  }
+
+  .reader :global(h1) {
+    font-size: 1.7em;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 0.25em;
+  }
+
+  .reader :global(h2) {
+    font-size: 1.38em;
+  }
+
+  .reader :global(h3) {
+    font-size: 1.18em;
+  }
+
+  .reader :global(p) {
+    margin: 0 0 0.9em;
+  }
+
+  .reader :global(a) {
+    color: var(--accent);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+  }
+
+  .reader :global(strong) {
+    color: var(--text);
+    font-weight: 700;
+  }
+
+  .reader :global(em) {
+    color: var(--text-muted);
+  }
+
+  .reader :global(del) {
+    color: var(--text-faint);
+  }
+
+  .reader :global(ul),
+  .reader :global(ol) {
+    margin: 0 0 0.9em;
+    padding-inline-start: 1.5em;
+  }
+
+  .reader :global(li) {
+    margin: 0.25em 0;
+  }
+
+  .reader :global(li.md-nested) {
+    margin-inline-start: 1.3em;
+    list-style-type: circle;
+  }
+
+  .reader :global(li.md-task) {
+    list-style: none;
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    margin-inline-start: -1.1em;
+  }
+
+  .reader :global(.md-check) {
+    width: 17px;
+    height: 17px;
+    border-radius: 5px;
+    border: 1.5px solid var(--border-strong);
+    display: inline-grid;
+    place-items: center;
+    font-size: 0.7em;
+    margin-top: 6px;
+    flex: 0 0 auto;
+  }
+
+  .reader :global(.md-check.on) {
+    background: var(--success);
+    border-color: var(--success);
+    color: #10240f;
+  }
+
+  .reader :global(.md-task-text.done) {
+    color: var(--text-faint);
+    text-decoration: line-through;
+  }
+
+  .reader :global(blockquote) {
+    margin: 0 0 1em;
+    padding: 8px 14px;
+    border-inline-start: 3px solid var(--accent);
+    background: var(--bg-elevated);
+    border-radius: var(--radius-sm);
+    color: var(--text-muted);
+  }
+
+  .reader :global(hr) {
+    border: none;
+    border-top: 1px solid var(--border);
+    margin: 1.6em 0;
+  }
+
+  .reader :global(code) {
+    direction: ltr;
+    unicode-bidi: embed;
+    display: inline-block;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: 5px;
+    padding: 0 5px;
+    font-family: "Cascadia Code", Consolas, monospace;
+    font-size: 0.86em;
+  }
+
+  .reader :global(pre.md-code) {
+    direction: ltr;
+    text-align: left;
+    background: var(--bg-raised);
+    border: 1px solid var(--border);
+    border-radius: var(--radius-sm);
+    padding: 14px 16px;
+    overflow-x: auto;
+    margin: 0 0 1em;
+    line-height: 1.65;
+  }
+
+  .reader :global(pre.md-code code) {
+    display: block;
+    background: none;
+    border: none;
+    padding: 0;
+    font-size: 0.88em;
+    white-space: pre;
+  }
+
+  .reader :global(.md-table-wrap) {
+    overflow-x: auto;
+    margin: 0 0 1em;
+  }
+
+  .reader :global(table) {
+    border-collapse: collapse;
+    width: 100%;
+    font-size: 0.92em;
+  }
+
+  .reader :global(th),
+  .reader :global(td) {
+    border: 1px solid var(--border);
+    padding: 7px 11px;
+  }
+
+  .reader :global(th) {
+    background: var(--bg-elevated);
+    font-weight: 700;
+  }
+
+  .reader :global(img) {
+    max-width: 100%;
+    border-radius: var(--radius-sm);
   }
 
   .text {

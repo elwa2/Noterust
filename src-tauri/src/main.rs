@@ -225,6 +225,7 @@ fn main() {
             commands::set_default_editor,
             commands::set_autostart,
             commands::shell_state,
+            commands::open_default_apps,
             commands::backup_now,
             commands::list_backups,
             commands::restore_backup,

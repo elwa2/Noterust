@@ -31,6 +31,11 @@
     { label: "المهام", hint: "", run: () => void store.setView("tasks") },
     { label: "الدخل والمصروفات", hint: "", run: () => void store.setView("finance") },
     { label: "الأكواد والبرومبت", hint: "Ctrl+4", run: () => void store.setView("snippets") },
+    {
+      label: "الآلة الحاسبة",
+      hint: "Ctrl+Shift+C",
+      run: () => window.dispatchEvent(new CustomEvent("noterust:calc")),
+    },
     { label: "الإعدادات", hint: "Ctrl+,", run: () => void store.setView("settings") },
     { label: "سلة المحذوفات", hint: "", run: () => void store.setView("trash") },
     { label: "دليل الاستخدام", hint: "F1", run: () => dispatch("help") },

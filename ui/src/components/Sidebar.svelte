@@ -138,6 +138,14 @@
         <span class="icon"><Icon name="code" /></span>
         <span class="label">الأكواد والبرومبت</span>
       </button>
+      <button
+        class="item"
+        title="الآلة الحاسبة (Ctrl+Shift+C)"
+        on:click={() => window.dispatchEvent(new CustomEvent("noterust:calc"))}
+      >
+        <span class="icon"><Icon name="calculator" /></span>
+        <span class="label">الآلة الحاسبة</span>
+      </button>
     </section>
   </div>
 

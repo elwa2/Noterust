@@ -153,6 +153,7 @@ export const api = {
   setDefaultEditor: (enabled: boolean) => call<string>("set_default_editor", { enabled }),
   setAutostart: (enabled: boolean) => call<void>("set_autostart", { enabled }),
   shellState: () => call<{ defaultEditor: boolean; autostart: boolean }>("shell_state"),
+  openDefaultApps: () => call<void>("open_default_apps"),
 
   backupNow: () => call<string>("backup_now"),
   listBackups: () => call<BackupEntry[]>("list_backups"),

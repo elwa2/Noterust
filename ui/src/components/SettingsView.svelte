@@ -167,6 +167,14 @@
     }
   }
 
+  async function openDefaultApps() {
+    try {
+      await api.openDefaultApps();
+    } catch (error) {
+      store.toast(store.errorMessage(error), "error");
+    }
+  }
+
   async function toggleAutostart() {
     try {
       await api.setAutostart(autostart);
@@ -299,7 +307,9 @@
         <div class="card">
           <h3>النظام</h3>
           <div class="row-field">
-            <label for="default-editor">تعيين NoteRust كمحرر افتراضي لملفات .txt</label>
+            <label for="default-editor">
+              تسجيل NoteRust لفتح ملفات txt / log / md / csv
+            </label>
             <input
               id="default-editor"
               type="checkbox"
@@ -307,6 +317,17 @@
               on:change={toggleDefaultEditor}
             />
           </div>
+          <div class="row wrap">
+            <button class="btn" on:click={openDefaultApps}>
+              جعله التطبيق الافتراضي…
+            </button>
+          </div>
+          <p class="faint">
+            زر «جعله التطبيق الافتراضي» يفتح إعدادات ويندوز على التطبيقات الافتراضية: اختر
+            NoteRust ثم اختر <bdi dir="ltr">.txt</bdi>. ويندوز ١٠/١١ يحمي هذا الاختيار ولا
+            يسمح لأي تطبيق بتغييره بصمت — هذه الخطوة مرة واحدة فقط. وبعدها أي ملف نصي
+            بضغطة مزدوجة يفتح في NoteRust، أو من قائمة الزر الأيمن «فتح باستخدام NoteRust».
+          </p>
           <div class="row-field">
             <label for="autostart">التشغيل مع بدء ويندوز</label>
             <input id="autostart" type="checkbox" bind:checked={autostart} on:change={toggleAutostart} />
@@ -336,11 +357,11 @@
               <dt>الوضع</dt>
               <dd>{info.portable ? "محمول (بجوار exe)" : "AppData"}</dd>
               <dt>مجلد البيانات</dt>
-              <dd class="path">{info.dataDir}</dd>
+              <dd class="path" title={info.dataDir}>{info.dataDir}</dd>
               <dt>قاعدة البيانات</dt>
-              <dd class="path">{info.dbPath}</dd>
+              <dd class="path" title={info.dbPath}>{info.dbPath}</dd>
               <dt>النسخ الاحتياطية</dt>
-              <dd class="path">{info.backupDir}</dd>
+              <dd class="path" title={info.backupDir}>{info.backupDir}</dd>
             </dl>
           {:else}
             <p class="faint">جارٍ التحميل…</p>
@@ -394,10 +415,13 @@
 
 <style>
   .view-page {
-    grid-column: 2 / -1;
+    grid-column: 3 / -1;
+    grid-row: 1;
     display: flex;
     flex-direction: column;
     min-width: 0;
+    min-height: 0;
+    overflow: hidden;
     background: var(--bg);
   }
 
@@ -421,7 +445,8 @@
 
   .content {
     flex: 1;
-    padding: 18px 26px 40px;
+    min-height: 0;
+    padding: 18px 26px 30px;
     overflow-y: auto;
   }
 
@@ -518,8 +543,12 @@
   .path {
     direction: ltr;
     text-align: left;
-    word-break: break-all;
-    font-size: 0.94em;
+    /* Break after separators when possible instead of mid-word. */
+    word-break: normal;
+    overflow-wrap: anywhere;
+    user-select: text;
+    font-size: 0.9em;
+    line-height: 1.5;
     color: var(--text-muted);
   }
 
