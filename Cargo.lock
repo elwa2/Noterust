@@ -2721,7 +2721,7 @@ checksum = "650eef8c711430f1a879fdd01d4745a7deea475becfb90269c06775983bbf086"
 
 [[package]]
 name = "noterust"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "directories",
@@ -2746,7 +2746,7 @@ dependencies = [
 
 [[package]]
 name = "noterust-core"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "serde",
@@ -2756,7 +2756,7 @@ dependencies = [
 
 [[package]]
 name = "noterust-crypto"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "aes-gcm",
  "argon2",
@@ -2768,7 +2768,7 @@ dependencies = [
 
 [[package]]
 name = "noterust-db"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chrono",
  "noterust-core",
@@ -2786,7 +2786,7 @@ dependencies = [
 
 [[package]]
 name = "noterust-fileio"
-version = "1.0.0"
+version = "1.0.1"
 dependencies = [
  "chardetng",
  "encoding_rs",
@@ -2798,7 +2798,7 @@ dependencies = [
 
 [[package]]
 name = "noterust-search"
-version = "1.0.0"
+version = "1.0.1"
 
 [[package]]
 name = "notify"

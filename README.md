@@ -276,7 +276,7 @@ tauri build --target x86_64-pc-windows-gnu --bundles nsis
 الناتج:
 
 ```
-target/x86_64-pc-windows-gnu/release/bundle/nsis/NoteRust_1.0.0_x64-setup.exe
+target/x86_64-pc-windows-gnu/release/bundle/nsis/NoteRust_1.0.1_x64-setup.exe
 ```
 
 مثبّت لكل مستخدم (`currentUser`) بلا صلاحيات مدير، بواجهة عربية/إنجليزية، يضيف
@@ -307,8 +307,8 @@ tauri build --bundles deb,appimage
 الناتج:
 
 ```
-target/release/bundle/deb/NoteRust_1.0.0_amd64.deb
-target/release/bundle/appimage/NoteRust_1.0.0_amd64.AppImage
+target/release/bundle/deb/NoteRust_1.0.1_amd64.deb
+target/release/bundle/appimage/NoteRust_1.0.1_amd64.AppImage
 ```
 
 تشغيل الـ AppImage: `chmod +x NoteRust_*.AppImage && ./NoteRust_*.AppImage`.
