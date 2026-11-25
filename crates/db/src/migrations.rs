@@ -200,6 +200,15 @@ CREATE TABLE ai_connections (
 CREATE INDEX idx_ai_connections_created ON ai_connections(created_at);
 "#;
 
+/// Rebuilds the search index from `notes`.
+///
+/// If the FTS5 document list ever drifts away from the `notes` table, SQLite
+/// reports it as `database disk image is malformed` and every later delete of
+/// the affected note fails. Re-indexing once on upgrade heals such databases.
+const REPAIR_SEARCH_INDEX: &str = r#"
+INSERT INTO notes_fts(notes_fts) VALUES('rebuild');
+"#;
+
 /// All migrations, oldest first.
 pub fn migrations() -> Migrations<'static> {
     Migrations::new(vec![
@@ -207,6 +216,7 @@ pub fn migrations() -> Migrations<'static> {
         M::up(SCHEMA_V2),
         M::up(SCHEMA_V3),
         M::up(SCHEMA_V4),
+        M::up(REPAIR_SEARCH_INDEX),
     ])
 }
 

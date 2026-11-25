@@ -187,23 +187,54 @@ pub fn restore(conn: &Connection, id: i64) -> Result<Note> {
     get(conn, id)
 }
 
+/// True when SQLite refuses the write because the FTS5 index no longer matches
+/// the `notes` table (`database disk image is malformed`).
+fn is_stale_search_index(err: &rusqlite::Error) -> bool {
+    matches!(
+        err,
+        rusqlite::Error::SqliteFailure(inner, _)
+            if inner.code == rusqlite::ErrorCode::DatabaseCorrupt
+    )
+}
+
+/// Runs a delete, repairing a desynchronised search index once and retrying.
+fn delete_with_index_repair(
+    conn: &Connection,
+    operation: impl Fn(&Connection) -> rusqlite::Result<usize>,
+) -> Result<usize> {
+    match operation(conn) {
+        Ok(deleted) => Ok(deleted),
+        Err(err) if is_stale_search_index(&err) => {
+            conn.execute("INSERT INTO notes_fts(notes_fts) VALUES('rebuild')", [])?;
+            Ok(operation(conn)?)
+        }
+        Err(err) => Err(err.into()),
+    }
+}
+
 pub fn purge(conn: &Connection, id: i64) -> Result<()> {
-    conn.execute("DELETE FROM notes WHERE id = ?1", params![id])?;
+    delete_with_index_repair(conn, |c| {
+        c.execute("DELETE FROM notes WHERE id = ?1", params![id])
+    })?;
     Ok(())
 }
 
 pub fn empty_trash(conn: &Connection) -> Result<i64> {
-    let deleted = conn.execute("DELETE FROM notes WHERE deleted_at IS NOT NULL", [])?;
+    let deleted = delete_with_index_repair(conn, |c| {
+        c.execute("DELETE FROM notes WHERE deleted_at IS NOT NULL", [])
+    })?;
     Ok(deleted as i64)
 }
 
 /// Permanently deletes notes that have been in the trash for `days` days.
 pub fn purge_expired(conn: &Connection, days: i64) -> Result<i64> {
     let cutoff = now_millis() - days.max(1) * 86_400_000;
-    let deleted = conn.execute(
-        "DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
-        params![cutoff],
-    )?;
+    let deleted = delete_with_index_repair(conn, |c| {
+        c.execute(
+            "DELETE FROM notes WHERE deleted_at IS NOT NULL AND deleted_at < ?1",
+            params![cutoff],
+        )
+    })?;
     Ok(deleted as i64)
 }
 

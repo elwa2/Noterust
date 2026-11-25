@@ -15,7 +15,9 @@ ui/dist/
 *.msi
 *.pdb
 
-# Local runtime data
+# Local runtime data and database backups
+_dbcheck*/
+_dbbackup-*/
 *.db
 *.db-wal
 *.db-shm
