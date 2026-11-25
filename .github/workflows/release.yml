@@ -69,10 +69,13 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
         run: |
-          gcc --version
+          "== gcc ==" | Tee-Object -FilePath build-windows.log
+          gcc --version 2>&1 | Tee-Object -FilePath build-windows.log -Append
+          "== rustc -vV ==" | Tee-Object -FilePath build-windows.log -Append
           $info = rustc -vV
-          $info
-          if ($info -notmatch "host: x86_64-pc-windows-gnu") { throw "rustc host is not windows-gnu" }
+          $info | Tee-Object -FilePath build-windows.log -Append
+          "== tauri build ==" | Tee-Object -FilePath build-windows.log -Append
+          if (($info -join "`n") -notmatch "host: x86_64-pc-windows-gnu") { throw "rustc host is not windows-gnu" }
           tauri build --target x86_64-pc-windows-gnu --no-bundle --verbose 2>&1 |
             Tee-Object -FilePath build-windows.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
@@ -92,12 +95,13 @@ jobs:
         run: |
           $log = "build-windows.log"
           if (-not (Test-Path $log)) { Write-Output "no build log was produced"; exit 0 }
-          $tail = (Get-Content $log -Tail 400) -join "`n"
-          if ($tail.Length -gt 55000) { $tail = $tail.Substring($tail.Length - 55000) }
+          $head = (Get-Content $log -TotalCount 60) -join "`n"
+          $tail = (Get-Content $log -Tail 300) -join "`n"
+          if ($tail.Length -gt 50000) { $tail = $tail.Substring($tail.Length - 50000) }
           $payload = @{
             title = "Windows CI log (${{ github.run_id }})"
             body  = "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`n`n" +
-                    "``````text`n" + $tail + "`n``````"
+                    "### Start`n``````text`n" + $head + "`n`````` `n### End`n``````text`n" + $tail + "`n``````"
           } | ConvertTo-Json
           Invoke-RestMethod -Method Post `
             -Uri "https://api.github.com/repos/${{ github.repository }}/issues" `
