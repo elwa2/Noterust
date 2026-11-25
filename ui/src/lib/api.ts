@@ -1,5 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import type {
+  AiConnection,
+  AiConnectionDraft,
   BackupEntry,
   Category,
   Counts,
@@ -59,6 +61,12 @@ const call = <T>(command: string, args?: Record<string, unknown>) =>
   });
 
 export const api = {
+  aiConnections: () => call<AiConnection[]>("ai_connections"),
+  aiSaveConnection: (draft: AiConnectionDraft) =>
+    call<AiConnection>("ai_save_connection", { draft }),
+  aiDeleteConnection: (id: number) => call<void>("ai_delete_connection", { id }),
+  aiTestConnection: (id: number) => call<string>("ai_test_connection", { id }),
+  aiChat: (id: number, prompt: string) => call<string>("ai_chat", { id, prompt }),
   listNotes: (query: ListQuery) => call<NoteSummary[]>("list_notes", { query }),
   getNote: (id: number) => call<Note>("get_note", { id }),
   createNote: (folderId: number | null) => call<Note>("create_note", { folderId }),
@@ -181,5 +189,15 @@ export const api = {
   reloadExternalFile: (id: number) => call<string>("reload_external_file", { id }),
   discardExternalLink: (id: number) => call<Note>("discard_external_link", { id }),
   setWindowTitle: (title: string) => call<void>("set_window_title", { title }),
+  setAlwaysOnTop: (value: boolean) => call<void>("set_always_on_top", { value }),
+  setCompactMode: (value: boolean) => call<void>("set_compact_mode", { value }),
+  saveBoard: (data: string) => call<void>("save_board", { data }),
+  loadBoard: () => call<string | null>("load_board"),
+  saveHtmlLab: (data: string) => call<void>("save_html_lab", { data }),
+  loadHtmlLab: () => call<string | null>("load_html_lab"),
+  setHtmlPreview: (html: string) => call<void>("set_html_preview", { html }),
+  saveAttachment: (data: string, ext: string) =>
+    call<string>("save_attachment", { data, ext }),
+  readAttachment: (name: string) => call<string>("read_attachment", { name }),
   refreshDailyBackup: () => call<void>("refresh_daily_backup"),
 };

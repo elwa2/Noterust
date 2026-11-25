@@ -19,6 +19,61 @@ function escapeHtml(text: string): string {
   });
 }
 
+/* Images pasted into notes are referenced as `![alt](noteimg://file.png)` and
+   stored outside the note text. Their files are loaded on demand and mapped
+   from file name to `data:` URL in `imageAssets` before rendering. */
+let imageAssets: Record<string, string> = {};
+let imageIndex = 0;
+
+/** `{w=320 r=90}` after an image adds a width in pixels and a rotation. */
+export interface ImageOptions {
+  width: number;
+  rotation: number;
+}
+
+const IMAGE_RE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)(?:\{([^}]*)\})?/g;
+const ATTACHMENT_PREFIX = "noteimg://";
+
+function parseImageOptions(raw: string | undefined): ImageOptions {
+  const options: ImageOptions = { width: 0, rotation: 0 };
+  if (!raw) return options;
+  for (const part of raw.split(/[\s,;]+/)) {
+    const [key, value] = part.split("=");
+    const number = Math.round(Number(value));
+    if (!Number.isFinite(number)) continue;
+    if (key === "w" || key === "width") options.width = Math.max(40, Math.min(4000, number));
+    if (key === "r" || key === "rotate") options.rotation = ((number % 360) + 360) % 360;
+  }
+  return options;
+}
+
+function imageMarkup(alt: string, src: string, source: string, options: ImageOptions): string {
+  const { width, rotation } = options;
+  const style = [
+    width > 0 ? `width:${width}px` : "",
+    rotation !== 0 ? `transform:rotate(${rotation}deg)` : "",
+  ]
+    .filter(Boolean)
+    .join(";");
+  const index = imageIndex;
+  imageIndex += 1;
+  return (
+    `<span class="md-image" data-img="${index}" data-w="${width}" data-r="${rotation}" data-src="${source}">` +
+    `<span class="md-image-frame"><img alt="${alt}" src="${src}" loading="lazy"${
+      style ? ` style="${style}"` : ""
+    } /></span>` +
+    `<span class="md-image-tools" dir="ltr">` +
+    `<button type="button" data-act="zoom-out" title="تصغير">−</button>` +
+    `<span class="md-image-zoom">${width > 0 ? `${width}px` : "100%"}</span>` +
+    `<button type="button" data-act="zoom-in" title="تكبير">+</button>` +
+    `<button type="button" data-act="rotate-left" title="تدوير لليسار">↺</button>` +
+    `<button type="button" data-act="rotate-right" title="تدوير لليمين">↻</button>` +
+    `<button type="button" data-act="reset" title="إعادة الحجم والاتجاه">إعادة</button>` +
+    `</span>` +
+    `</span>`
+  );
+}
+
 function inline(text: string): string {
   const codes: string[] = [];
   let value = text.replace(/`([^`]+)`/g, (_match, code: string) => {
@@ -27,10 +82,11 @@ function inline(text: string): string {
   });
 
   value = escapeHtml(value);
-  value = value.replace(
-    /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
-    '<img alt="$1" src="$2" loading="lazy" />',
-  );
+  value = value.replace(IMAGE_RE, (_match, alt: string, src: string, raw?: string) => {
+    const name = src.startsWith(ATTACHMENT_PREFIX) ? src.slice(ATTACHMENT_PREFIX.length) : "";
+    const resolved = name ? (imageAssets[name] ?? "") : src;
+    return imageMarkup(alt, resolved, src, parseImageOptions(raw));
+  });
   value = value.replace(
     /\[([^\]]+)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)/g,
     '<a href="$2" target="_blank" rel="noreferrer">$1</a>',
@@ -68,8 +124,32 @@ function splitRow(line: string): string[] {
     .map((cell) => cell.trim());
 }
 
+/** Rewrites the `{w=… r=…}` suffix of the nth image in the note text. */
+export function setImageOptions(source: string, index: number, options: ImageOptions): string {
+  const parts: string[] = [];
+  if (options.width > 0) parts.push(`w=${Math.round(options.width)}`);
+  const rotation = ((Math.round(options.rotation) % 360) + 360) % 360;
+  if (rotation !== 0) parts.push(`r=${rotation}`);
+  const suffix = parts.length > 0 ? `{${parts.join(" ")}}` : "";
+  let seen = -1;
+  return source.replace(
+    IMAGE_RE,
+    (match, alt: string, src: string) => {
+      seen += 1;
+      if (seen !== index) return match;
+      const quote = /\s+&quot;[^&]*&quot;/.exec(match)?.[0] ?? "";
+      return `![${alt}](${src}${quote})${suffix}`;
+    },
+  );
+}
+
 /** Renders Markdown to safe HTML. */
-export function renderMarkdown(source: string): string {
+export function renderMarkdown(
+  source: string,
+  images: Record<string, string> = {},
+): string {
+  imageAssets = images;
+  imageIndex = 0;
   const lines = source.replace(/\r\n?/g, "\n").split("\n");
   const out: string[] = [];
   let i = 0;
@@ -92,7 +172,10 @@ export function renderMarkdown(source: string): string {
       }
       i += 1;
       const lang = fence[1] ? ` data-lang="${escapeHtml(fence[1])}"` : "";
-      out.push(`<pre class="md-code"${lang} dir="ltr"><code>${escapeHtml(body.join("\n"))}</code></pre>`);
+      out.push(
+        `<div class="md-code-block"><button type="button" class="md-copy" data-act="copy-code" title="نسخ الكود كاملاً" aria-label="نسخ الكود كاملاً">نسخ</button>` +
+          `<pre class="md-code"${lang} dir="ltr"><code>${escapeHtml(body.join("\n"))}</code></pre></div>`,
+      );
       continue;
     }
 
@@ -149,7 +232,7 @@ export function renderMarkdown(source: string): string {
         quoted.push(lines[i].replace(/^\s*>\s?/, ""));
         i += 1;
       }
-      out.push(`<blockquote>${inline(quoted.join("<br />").replace(/<br \/>/g, "\n"))}</blockquote>`);
+      out.push(`<blockquote>${inline(quoted.join("\n")).replace(/\n/g, "<br />")}</blockquote>`);
       continue;
     }
 

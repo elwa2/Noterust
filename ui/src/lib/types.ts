@@ -95,6 +95,26 @@ export interface Snippet {
   updatedAt: number;
 }
 
+export interface AiConnection {
+  id: number;
+  name: string;
+  kind: "openai" | "gemini" | "anthropic";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface AiConnectionDraft {
+  id?: number | null;
+  name: string;
+  kind: "openai" | "gemini" | "anthropic";
+  baseUrl: string;
+  apiKey: string;
+  model: string;
+}
+
 export interface Category {
   id: number;
   name: string;

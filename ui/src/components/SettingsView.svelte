@@ -5,6 +5,12 @@
   import { settings } from "../lib/store";
   import { arabicDigits, arabicDateTime, CURRENCIES, fileSize, NOUNS, plural } from "../lib/format";
   import BackButton from "./BackButton.svelte";
+  import {
+    SIDEBAR_ITEMS,
+    sidebarPrefs,
+    setSidebarCollapsed,
+    toggleSidebarItem,
+  } from "../lib/sidebarPrefs";
   import type { BackupEntry, DataInfo } from "../lib/types";
 
   let info: DataInfo | null = null;
@@ -236,6 +242,7 @@
               on:change={(event) => save("font_family", (event.currentTarget as HTMLSelectElement).value)}
             >
               <option value="Cairo">Cairo (مضمّن)</option>
+              <option value="IBM Plex Sans Arabic">IBM Plex Sans Arabic (مضمّن)</option>
               <option value="Segoe UI">Segoe UI</option>
               <option value="Noto Naskh Arabic">Noto Naskh Arabic</option>
               <option value="Tahoma">Tahoma</option>
@@ -279,17 +286,50 @@
         </div>
 
         <div class="card">
+          <h3>الشريط الجانبي</h3>
+          <label class="side-toggle">
+            <input
+              type="checkbox"
+              checked={$sidebarPrefs.collapsed}
+              on:change={(event) =>
+                setSidebarCollapsed((event.currentTarget as HTMLInputElement).checked)}
+            />
+            <span>طيّ الشريط إلى أيقونات فقط (بدون أسماء)</span>
+          </label>
+          <p class="muted side-hint">اختر التبويبات التي تظهر في الشريط الجانبي:</p>
+          <div class="side-items">
+            {#each SIDEBAR_ITEMS as item (item.id)}
+              <label class="side-toggle">
+                <input
+                  type="checkbox"
+                  checked={!$sidebarPrefs.hidden.includes(item.id)}
+                  on:change={() => toggleSidebarItem(item.id)}
+                />
+                <span>{item.name}</span>
+              </label>
+            {/each}
+          </div>
+        </div>
+
+        <div class="card">
           <h3>الاحتفاظ والنسخ</h3>
           <div class="row-field">
-            <label for="trash-days">الاحتفاظ بالمحذوفات (أيام)</label>
-            <input
+            <label for="trash-days">مدة بقاء الملاحظات في المحذوفة</label>
+            <select
               id="trash-days"
-              type="number"
-              min="1"
-              max="365"
               value={retention}
-              on:change={(event) => clampSave(event, "trash_retention_days", 1, 365)}
-            />
+              on:change={(event) =>
+                save("trash_retention_days", (event.currentTarget as HTMLSelectElement).value)}
+            >
+              {#if !["7", "15", "30", "60", "90"].includes(retention)}
+                <option value={retention}>{arabicDigits(retention)} يوم</option>
+              {/if}
+              <option value="7">٧ أيام</option>
+              <option value="15">١٥ يومًا</option>
+              <option value="30">٣٠ يومًا</option>
+              <option value="60">٦٠ يومًا</option>
+              <option value="90">٩٠ يومًا</option>
+            </select>
           </div>
           <div class="row-field">
             <label for="backup-keep">عدد النسخ الاحتياطية المحفوظة</label>
@@ -480,6 +520,31 @@
 
   .row-field:last-child {
     border-bottom: none;
+  }
+
+  .side-hint {
+    margin: 10px 0 6px;
+    font-size: 0.86em;
+  }
+
+  .side-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 4px 0;
+    font-size: 0.9em;
+    color: var(--text-muted);
+    cursor: pointer;
+  }
+
+  .side-toggle:hover {
+    color: var(--text);
+  }
+
+  .side-items {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 2px 18px;
   }
 
   .row-field label {

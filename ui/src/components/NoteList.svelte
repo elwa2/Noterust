@@ -74,6 +74,47 @@
     }
   }
 
+  let menu: { x: number; y: number; note: NoteSummary | SearchHit } | null = null;
+
+  function openMenu(event: MouseEvent, note: NoteSummary | SearchHit) {
+    event.preventDefault();
+    event.stopPropagation();
+    const width = 190;
+    const height = 130;
+    menu = {
+      x: Math.min(event.clientX, window.innerWidth - width),
+      y: Math.min(event.clientY, window.innerHeight - height),
+      note,
+    };
+  }
+
+  function closeMenu() {
+    menu = null;
+  }
+
+  async function moveToTrash(note: NoteSummary | SearchHit, event?: MouseEvent) {
+    event?.stopPropagation();
+    closeMenu();
+    try {
+      await api.deleteNote(note.id);
+      await store.removeNoteFromUi(note.id);
+      store.toast("نُقلت إلى المحذوفة مؤقتاً", "ok", {
+        label: "تراجع",
+        run: () => {
+          void api
+            .restoreNote(note.id)
+            .then(async () => {
+              await store.refreshAll();
+              store.toast("تم الاسترجاع");
+            })
+            .catch((error) => store.toast(store.errorMessage(error), "error"));
+        },
+      });
+    } catch (error) {
+      store.toast(store.errorMessage(error), "error");
+    }
+  }
+
   async function emptyTrash() {
     if ($notes.length === 0) return;
     if (!confirm(`حذف ${plural($notes.length, NOUNS.note)} نهائياً؟ لا يمكن التراجع.`)) return;
@@ -169,6 +210,7 @@
           on:dragstart={(event) => dragStart(event, note)}
           on:click={() => store.openNote(note.id)}
           on:keydown={(event) => event.key === "Enter" && store.openNote(note.id)}
+          on:contextmenu={(event) => openMenu(event, note)}
           role="button"
           tabindex="0"
         >
@@ -177,13 +219,25 @@
             {#if note.isLocked}<span class="pin" title="مقفلة"><Icon name="lock" size={12} /></span>{/if}
             <span class="title">{note.title || "بدون عنوان"}</span>
             <span class="spacer"></span>
-            <button
-              class="icon-btn tiny"
-              on:click={(event) => togglePin(note, event)}
-              title={note.isPinned ? "إلغاء التثبيت" : "تثبيت"}
-            >
-              <Icon name="pin" size={13} />
-            </button>
+            <span class="row-actions">
+              {#if $view !== "trash"}
+                <button
+                  class="icon-btn tiny"
+                  class:on={note.isPinned}
+                  on:click={(event) => togglePin(note, event)}
+                  title={note.isPinned ? "إلغاء التثبيت" : "تثبيت"}
+                >
+                  <Icon name="pin" size={13} />
+                </button>
+              {/if}
+              <button
+                class="icon-btn tiny danger"
+                on:click={(event) => ($view === "trash" ? deleteForever(note, event) : moveToTrash(note, event))}
+                title={$view === "trash" ? "حذف نهائي" : "نقل إلى المحذوفة"}
+              >
+                <Icon name="trash" size={13} />
+              </button>
+            </span>
           </div>
 
           <p class="preview">
@@ -213,6 +267,33 @@
       {/each}
     {/each}
   </div>
+
+  {#if menu}
+    <div
+      class="ctx-layer"
+      role="presentation"
+      on:click={closeMenu}
+      on:contextmenu|preventDefault={closeMenu}
+    ></div>
+    <div class="ctx-menu" style="left:{menu.x}px; top:{menu.y}px" role="menu" tabindex="-1">
+      {#if $view === "trash"}
+        <button class="ctx-item" on:click={(event) => restore(menu!.note, event)}>استرجاع</button>
+        <button class="ctx-item danger" on:click={(event) => deleteForever(menu!.note, event)}>
+          حذف نهائياً
+        </button>
+      {:else}
+        <button class="ctx-item" on:click={() => { const id = menu!.note.id; closeMenu(); void store.openNote(id); }}>
+          فتح
+        </button>
+        <button class="ctx-item" on:click={(event) => togglePin(menu!.note, event)}>
+          {menu!.note.isPinned ? "إلغاء التثبيت" : "تثبيت"}
+        </button>
+        <button class="ctx-item danger" on:click={(event) => moveToTrash(menu!.note, event)}>
+          نقل إلى المحذوفة
+        </button>
+      {/if}
+    </div>
+  {/if}
 </section>
 
 <style>
@@ -357,14 +438,66 @@
     place-items: center;
   }
 
+  .row-actions {
+    display: flex;
+    gap: 1px;
+    opacity: 0;
+    transition: opacity 120ms ease;
+  }
+
+  .note-item:hover .row-actions,
+  .note-item.active .row-actions,
+  .note-item:focus-within .row-actions {
+    opacity: 1;
+  }
+
   .icon-btn.tiny {
     width: 22px;
     height: 22px;
-    opacity: 0.35;
   }
 
-  .note-item:hover .icon-btn.tiny {
-    opacity: 0.9;
+  .icon-btn.tiny.on {
+    color: var(--accent);
+  }
+
+  .icon-btn.tiny.danger:hover {
+    color: var(--danger);
+  }
+
+  .ctx-layer {
+    position: fixed;
+    inset: 0;
+    z-index: 40;
+  }
+
+  .ctx-menu {
+    position: fixed;
+    z-index: 41;
+    min-width: 178px;
+    padding: 5px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--border-strong);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 16px 44px rgba(0, 0, 0, 0.45);
+    display: flex;
+    flex-direction: column;
+    gap: 1px;
+  }
+
+  .ctx-item {
+    text-align: start;
+    padding: 7px 11px;
+    border-radius: 6px;
+    font-size: 0.84em;
+    color: var(--text);
+  }
+
+  .ctx-item:hover {
+    background: var(--bg-hover);
+  }
+
+  .ctx-item.danger {
+    color: var(--danger);
   }
 
   .preview {

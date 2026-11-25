@@ -2,7 +2,16 @@ import { derived, get, writable } from "svelte/store";
 import { api } from "./api";
 import type { Counts, FolderNode, Note, NoteSummary, SearchHit } from "./types";
 
-export type View = "notes" | "tasks" | "finance" | "snippets" | "settings" | "trash";
+export type View =
+  | "notes"
+  | "tasks"
+  | "finance"
+  | "snippets"
+  | "board"
+  | "ai"
+  | "html"
+  | "settings"
+  | "trash";
 
 export const folders = writable<FolderNode[]>([]);
 export const notes = writable<(NoteSummary | SearchHit)[]>([]);
@@ -45,6 +54,32 @@ export function toast(text: string, kind: "ok" | "error" = "ok", action?: ToastA
   setTimeout(() => {
     toasts.update((list) => list.filter((item) => item.id !== id));
   }, action ? 6500 : 3800);
+}
+
+/** Window pinned above every other program on the desktop. */
+export const alwaysOnTop = writable(false);
+/** Small "sticky note" mode: only the open note, always on top. */
+export const compact = writable(false);
+
+export async function setAlwaysOnTop(value: boolean) {
+  try {
+    await api.setAlwaysOnTop(value);
+    alwaysOnTop.set(value);
+  } catch (error) {
+    toast(errorMessage(error), "error");
+  }
+}
+
+export async function setCompact(value: boolean) {
+  try {
+    await api.setCompactMode(value);
+    compact.set(value);
+    // Entering sticky mode pins the window; leaving it unpins.
+    alwaysOnTop.set(value);
+    toast(value ? "وضع الملاحظة البسيطة — زر ⤢ للخروج" : "رجعت للنافذة الكاملة");
+  } catch (error) {
+    toast(errorMessage(error), "error");
+  }
 }
 
 export function dismissToast(id: number) {
@@ -132,10 +167,10 @@ export async function selectFolder(folderId: number | null) {
 export async function setView(next: View) {
   view.set(next);
   searchQuery.set("");
-  if (next !== "trash") {
-    activeFolder.set(null);
-  }
-  if (next === "notes") {
+  // The trash and the other views are global, never scoped to a folder —
+  // keeping a selected folder here hid every note deleted outside it.
+  activeFolder.set(null);
+  if (next === "notes" || next === "trash") {
     await refreshNotes();
   }
   saveSession();

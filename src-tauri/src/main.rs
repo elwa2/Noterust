@@ -6,6 +6,8 @@
 //! message instead of an obscure panic), then the data directories and the
 //! database are prepared, and only then is the window created.
 
+mod ai;
+mod base64;
 mod commands;
 mod db_worker;
 mod paths;
@@ -116,13 +118,42 @@ fn main() {
     let paths_for_state = paths.clone();
 
     let app = tauri::Builder::default()
+        // Preview frame origin: the app's CSP would otherwise be inherited by
+        // `srcdoc` and block the page's own scripts, fonts and images.
+        .register_uri_scheme_protocol("htmlpreview", |ctx, _request| {
+            let html = ctx
+                .app_handle()
+                .try_state::<AppState>()
+                .and_then(|state| {
+                    state
+                        .html_preview
+                        .lock()
+                        .map(|code| code.clone())
+                        .ok()
+                })
+                .unwrap_or_default();
+            match tauri::http::Response::builder()
+                .header(tauri::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .header(tauri::http::header::CACHE_CONTROL, "no-store")
+                .body(html.into_bytes())
+            {
+                Ok(response) => response,
+                Err(_) => tauri::http::Response::new(Vec::new()),
+            }
+        })
         .plugin(tauri_plugin_window_state::Builder::default().build())
         .plugin(tauri_plugin_single_instance::init(
             move |app, argv, _cwd| {
+                // The forwarded command line starts with the executable itself;
+                // treating it as a document would try to open the .exe as text.
+                let exe = std::env::current_exe().ok();
                 let files: Vec<String> = argv
                     .into_iter()
                     .filter(|arg| !arg.starts_with('-'))
-                    .filter(|arg| std::path::Path::new(arg).is_file())
+                    .filter(|arg| {
+                        let path = std::path::Path::new(arg);
+                        path.is_file() && exe.as_deref() != Some(path)
+                    })
                     .collect();
                 if !files.is_empty() {
                     if let Ok(mut guard) = pending_for_plugin.lock() {
@@ -144,8 +175,25 @@ fn main() {
                 app: app.handle().clone(),
                 watchers: Arc::new(Mutex::new(HashMap::new())),
                 pending_open: pending.clone(),
+                compact_restore: Arc::new(Mutex::new(None)),
+                html_preview: Arc::new(Mutex::new(String::new())),
             };
             app.manage(state);
+
+            // Frameless window: the UI draws its own title bar.
+            match app.get_webview_window("main") {
+                Some(window) => match window.set_decorations(false) {
+                    Ok(()) => tracing::info!("main window set undecorated"),
+                    Err(err) => tracing::error!("set_decorations failed: {err}"),
+                },
+                None => tracing::error!("main window not available in setup"),
+            }
+            #[cfg(target_os = "windows")]
+            if let Some(window) = app.get_webview_window("main") {
+                if let Err(err) = window.set_shadow(true) {
+                    tracing::error!("set_shadow failed: {err}");
+                }
+            }
 
             build_tray(app)?;
             Ok(())
@@ -244,7 +292,21 @@ fn main() {
             commands::reload_external_file,
             commands::discard_external_link,
             commands::set_window_title,
+            commands::set_always_on_top,
+            commands::set_compact_mode,
+            commands::save_board,
+            commands::load_board,
+            commands::save_html_lab,
+            commands::load_html_lab,
+            commands::set_html_preview,
+            commands::save_attachment,
+            commands::read_attachment,
             commands::refresh_daily_backup,
+            ai::ai_connections,
+            ai::ai_save_connection,
+            ai::ai_delete_connection,
+            ai::ai_test_connection,
+            ai::ai_chat,
         ])
         .build(tauri::generate_context!());
 

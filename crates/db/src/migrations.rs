@@ -184,9 +184,30 @@ CREATE TABLE snippets (
 CREATE INDEX idx_snippets_kind ON snippets(kind, updated_at DESC);
 "#;
 
+/// AI provider endpoints added by the user (local servers and cloud APIs).
+const SCHEMA_V4: &str = r#"
+CREATE TABLE ai_connections (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    name       TEXT    NOT NULL DEFAULT '',
+    kind       TEXT    NOT NULL DEFAULT 'openai'
+               CHECK (kind IN ('openai', 'gemini', 'anthropic')),
+    base_url   TEXT    NOT NULL DEFAULT '',
+    api_key    TEXT    NOT NULL DEFAULT '',
+    model      TEXT    NOT NULL DEFAULT '',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+CREATE INDEX idx_ai_connections_created ON ai_connections(created_at);
+"#;
+
 /// All migrations, oldest first.
 pub fn migrations() -> Migrations<'static> {
-    Migrations::new(vec![M::up(SCHEMA_V1), M::up(SCHEMA_V2), M::up(SCHEMA_V3)])
+    Migrations::new(vec![
+        M::up(SCHEMA_V1),
+        M::up(SCHEMA_V2),
+        M::up(SCHEMA_V3),
+        M::up(SCHEMA_V4),
+    ])
 }
 
 /// Brings `conn` up to the latest schema version.

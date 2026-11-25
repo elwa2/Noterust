@@ -25,6 +25,10 @@ use tauri::{AppHandle, Emitter, State};
 use crate::paths::Paths;
 use crate::watcher::{stop_watching as stop_file_watching, watch_note};
 
+/// Saved window geometry before the small "sticky note" mode:
+/// x, y, inner width, inner height and whether it was maximized.
+pub type CompactGeometry = (i32, i32, u32, u32, bool);
+
 /// Shared application state.
 pub struct AppState {
     pub db: crate::db_worker::DbHandle,
@@ -34,6 +38,10 @@ pub struct AppState {
     pub watchers: Arc<Mutex<HashMap<i64, Arc<AtomicBool>>>>,
     /// Files passed on the command line / to a second instance.
     pub pending_open: Arc<Mutex<Vec<String>>>,
+    /// Window geometry saved before entering the small "sticky note" mode.
+    pub compact_restore: Arc<Mutex<Option<CompactGeometry>>>,
+    /// Latest HTML playground document served to the preview frame.
+    pub html_preview: Arc<Mutex<String>>,
 }
 
 impl AppState {
@@ -45,7 +53,7 @@ impl AppState {
 }
 
 /// Runs a database closure on the worker thread.
-async fn db_call<T, F>(db: crate::db_worker::DbHandle, f: F) -> Result<T, String>
+pub(crate) async fn db_call<T, F>(db: crate::db_worker::DbHandle, f: F) -> Result<T, String>
 where
     T: Send + 'static,
     F: FnOnce(&mut Db) -> Result<T, DbError> + Send + 'static,
@@ -747,7 +755,15 @@ pub async fn set_setting(
 ) -> Result<(), String> {
     let db = state.db.clone();
     db_call(db, move |db| {
-        noterust_db::settings::set(db.conn(), &key, &value)
+        noterust_db::settings::set(db.conn(), &key, &value)?;
+        // Shortening the retention window should take effect immediately
+        // instead of waiting for the next launch.
+        if key == "trash_retention_days" {
+            if let Ok(days) = value.trim().parse::<i64>() {
+                let _ = noterust_db::notes::purge_expired(db.conn(), days);
+            }
+        }
+        Ok(())
     })
     .await
 }
@@ -1323,6 +1339,248 @@ pub fn set_window_title(window: tauri::Window, title: String) -> Result<(), Stri
     window.set_title(&title).map_err(|err| err.to_string())
 }
 
+/// Keeps the window above every other program on the desktop.
+#[tauri::command]
+pub fn set_always_on_top(window: tauri::Window, value: bool) -> Result<(), String> {
+    window
+        .set_always_on_top(value)
+        .map_err(|err| err.to_string())
+}
+
+/// Turns the window into a small, light "sticky note" panel: only the open
+/// note, always on top, parked at the top-right corner of the current monitor.
+#[tauri::command]
+pub fn set_compact_mode(
+    state: State<'_, AppState>,
+    window: tauri::Window,
+    value: bool,
+) -> Result<(), String> {
+    if value {
+        // Size and position are saved as inner geometry because `set_size`
+        // applies the client area, which restores the box exactly.
+        let size = window.inner_size().map_err(|err| err.to_string())?;
+        let position = window.outer_position().map_err(|err| err.to_string())?;
+        let maximized = window.is_maximized().unwrap_or(false);
+        if let Ok(mut restore) = state.compact_restore.lock() {
+            *restore = Some((position.x, position.y, size.width, size.height, maximized));
+        }
+        let _ = window.unmaximize();
+        window
+            .set_min_size(Some(tauri::LogicalSize::new(320.0, 260.0)))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_size(tauri::LogicalSize::new(430.0, 620.0))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_always_on_top(true)
+            .map_err(|err| err.to_string())?;
+
+        let monitor = match window.current_monitor() {
+            Ok(Some(monitor)) => Some(monitor),
+            _ => window.primary_monitor().ok().flatten(),
+        };
+        if let Some(monitor) = monitor {
+            let width = window.outer_size().map(|size| size.width).unwrap_or(430) as i32;
+            let x = monitor.position().x + monitor.size().width as i32 - width - 36;
+            let y = monitor.position().y + 48;
+            let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+        }
+        let _ = window.set_focus();
+        return Ok(());
+    }
+
+    window.set_always_on_top(false).ok();
+    window
+        .set_min_size(Some(tauri::LogicalSize::new(900.0, 560.0)))
+        .map_err(|err| err.to_string())?;
+    let restore = state
+        .compact_restore
+        .lock()
+        .ok()
+        .and_then(|mut slot| slot.take());
+    if let Some((x, y, width, height, maximized)) = restore {
+        window
+            .set_size(tauri::PhysicalSize::new(width, height))
+            .map_err(|err| err.to_string())?;
+        window
+            .set_position(tauri::PhysicalPosition::new(x, y))
+            .map_err(|err| err.to_string())?;
+        if maximized {
+            let _ = window.maximize();
+        }
+    }
+    Ok(())
+}
+
+/// Extensions accepted for pasted images, normalized (`jpeg` becomes `jpg`).
+fn image_extension(raw: &str) -> Result<&'static str, String> {
+    match raw.trim().trim_start_matches('.').to_ascii_lowercase().as_str() {
+        "png" => Ok("png"),
+        "jpg" | "jpeg" => Ok("jpg"),
+        "gif" => Ok("gif"),
+        "webp" => Ok("webp"),
+        "bmp" => Ok("bmp"),
+        "svg" => Ok("svg"),
+        _ => Err("صيغة الصورة غير مدعومة".to_string()),
+    }
+}
+
+fn image_mime(name: &str) -> &'static str {
+    match name.rsplit('.').next().unwrap_or("").to_ascii_lowercase().as_str() {
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "bmp" => "image/bmp",
+        "svg" => "image/svg+xml",
+        _ => "image/png",
+    }
+}
+
+/// Only plain file names inside the assets folder are addressable.
+fn attachment_name(name: &str) -> Result<&str, String> {
+    let valid = !name.is_empty()
+        && !name.contains(['/', '\\', ':'])
+        && name != ".."
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || matches!(ch, '.' | '-' | '_'));
+    if valid {
+        Ok(name)
+    } else {
+        Err("اسم الصورة غير صالح".to_string())
+    }
+}
+
+const MAX_ATTACHMENT_BYTES: usize = 30 * 1024 * 1024;
+
+/// Stores a pasted image (Base64) in the assets folder and returns its name,
+/// which is what the note text references as `noteimg://<name>`.
+fn write_attachment(paths: &Paths, data: &str, ext: &str) -> Result<String, String> {
+    let ext = image_extension(ext)?;
+    let bytes = crate::base64::decode(data)?;
+    if bytes.is_empty() {
+        return Err("الصورة فارغة".to_string());
+    }
+    if bytes.len() > MAX_ATTACHMENT_BYTES {
+        return Err("الصورة أكبر من ٣٠ ميجابايت".to_string());
+    }
+    let dir = &paths.assets_dir;
+    std::fs::create_dir_all(dir).map_err(|err| format!("تعذر إنشاء مجلد الصور: {err}"))?;
+    let stamp = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_millis())
+        .unwrap_or_default();
+    let mut name = format!("img-{stamp}.{ext}");
+    let mut attempt = 1;
+    while dir.join(&name).exists() {
+        attempt += 1;
+        name = format!("img-{stamp}-{attempt}.{ext}");
+    }
+    std::fs::write(dir.join(&name), &bytes).map_err(|err| format!("تعذر حفظ الصورة: {err}"))?;
+    Ok(name)
+}
+
+/// Reads a stored image back as a `data:` URL for the Markdown preview.
+fn load_attachment(paths: &Paths, name: &str) -> Result<String, String> {
+    let name = attachment_name(name)?;
+    let path = paths.assets_dir.join(name);
+    let bytes = std::fs::read(&path).map_err(|err| format!("تعذر قراءة الصورة: {err}"))?;
+    Ok(format!(
+        "data:{};base64,{}",
+        image_mime(name),
+        crate::base64::encode(&bytes)
+    ))
+}
+
+/// Writes a small state file (whiteboard, HTML lab) atomically: a temporary
+/// file is written first, so a crash mid-write never truncates the original.
+fn write_data_file(paths: &Paths, name: &str, data: &str, label: &str) -> Result<(), String> {
+    std::fs::create_dir_all(&paths.data_dir)
+        .map_err(|err| format!("تعذر إنشاء مجلد البيانات: {err}"))?;
+    let target = paths.data_dir.join(name);
+    let temp = paths.data_dir.join(format!("{name}.tmp"));
+    std::fs::write(&temp, data).map_err(|err| format!("تعذر حفظ {label}: {err}"))?;
+    std::fs::rename(&temp, &target).map_err(|err| format!("تعذر حفظ {label}: {err}"))?;
+    Ok(())
+}
+
+fn read_data_file(
+    paths: &Paths,
+    name: &str,
+    label: &str,
+) -> Result<Option<String>, String> {
+    match std::fs::read_to_string(paths.data_dir.join(name)) {
+        Ok(text) => Ok(Some(text)),
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(err) => Err(format!("تعذر قراءة {label}: {err}")),
+    }
+}
+
+fn write_board(paths: &Paths, data: &str) -> Result<(), String> {
+    write_data_file(paths, "board.json", data, "السبورة")
+}
+
+fn read_board(paths: &Paths) -> Result<Option<String>, String> {
+    read_data_file(paths, "board.json", "السبورة")
+}
+
+/// Auto-saved whiteboard state (same JSON the board keeps in localStorage).
+#[tauri::command]
+pub fn save_board(state: State<'_, AppState>, data: String) -> Result<(), String> {
+    write_board(&state.paths, &data)
+}
+
+#[tauri::command]
+pub fn load_board(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    read_board(&state.paths)
+}
+
+fn write_html_lab(paths: &Paths, data: &str) -> Result<(), String> {
+    write_data_file(paths, "html-lab.html", data, "معمل HTML")
+}
+
+fn read_html_lab(paths: &Paths) -> Result<Option<String>, String> {
+    read_data_file(paths, "html-lab.html", "معمل HTML")
+}
+
+/// Auto-saved HTML playground document.
+#[tauri::command]
+pub fn save_html_lab(state: State<'_, AppState>, data: String) -> Result<(), String> {
+    write_html_lab(&state.paths, &data)
+}
+
+#[tauri::command]
+pub fn load_html_lab(state: State<'_, AppState>) -> Result<Option<String>, String> {
+    read_html_lab(&state.paths)
+}
+
+/// Stores the document the `htmlpreview://` protocol serves to the preview frame.
+/// It has to live outside the main document's CSP, which is why the frame loads
+/// it from a separate origin instead of using `srcdoc`.
+#[tauri::command]
+pub fn set_html_preview(state: State<'_, AppState>, html: String) -> Result<(), String> {
+    let mut guard = state
+        .html_preview
+        .lock()
+        .map_err(|_| "تعذر تحديث المعاينة".to_string())?;
+    *guard = html;
+    Ok(())
+}
+
+#[tauri::command]
+pub fn save_attachment(
+    state: State<'_, AppState>,
+    data: String,
+    ext: String,
+) -> Result<String, String> {
+    write_attachment(&state.paths, &data, &ext)
+}
+
+#[tauri::command]
+pub fn read_attachment(state: State<'_, AppState>, name: String) -> Result<String, String> {
+    load_attachment(&state.paths, &name)
+}
+
 #[tauri::command]
 pub async fn refresh_daily_backup(state: State<'_, AppState>) -> Result<(), String> {
     let db = state.db.clone();
@@ -1360,4 +1618,76 @@ pub fn spawn_watch_thread(state: &AppState, note_id: i64, path: PathBuf, stop: A
             }
         })
         .ok();
+}
+
+#[cfg(test)]
+mod attachment_tests {
+    use super::{
+        load_attachment, read_board, read_html_lab, write_attachment, write_board, write_html_lab,
+    };
+    use crate::paths::Paths;
+
+    fn temp_paths(tag: &str) -> Paths {
+        let stamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|elapsed| elapsed.as_nanos())
+            .unwrap_or_default();
+        let dir = std::env::temp_dir().join(format!("noterust-{tag}-{stamp}"));
+        Paths {
+            db_path: dir.join("noterust.db"),
+            backup_dir: dir.join("backups"),
+            log_dir: dir.join("logs"),
+            assets_dir: dir.join("assets"),
+            data_dir: dir,
+            portable: false,
+        }
+    }
+
+    #[test]
+    fn round_trip_attachment() {
+        let paths = temp_paths("attach");
+        let data = crate::base64::encode(b"png-bytes");
+        let name = write_attachment(&paths, &data, "png").expect("write");
+        assert!(name.ends_with(".png"), "{name}");
+        let url = load_attachment(&paths, &name).expect("read");
+        assert_eq!(url, format!("data:image/png;base64,{data}"));
+        let _ = std::fs::remove_dir_all(&paths.data_dir);
+    }
+
+    #[test]
+    fn board_round_trip_leaves_no_temp_file() {
+        let paths = temp_paths("board");
+        assert!(read_board(&paths).expect("read empty").is_none());
+        write_board(&paths, "{\"shapes\":[]}").expect("write");
+        assert_eq!(
+            read_board(&paths).expect("read").as_deref(),
+            Some("{\"shapes\":[]}")
+        );
+        assert!(!paths.data_dir.join("board.json.tmp").exists());
+        let _ = std::fs::remove_dir_all(&paths.data_dir);
+    }
+
+    #[test]
+    fn html_lab_round_trip() {
+        let paths = temp_paths("html-lab");
+        assert!(read_html_lab(&paths).expect("read empty").is_none());
+        write_html_lab(&paths, "<html>تجربة</html>").expect("write");
+        assert_eq!(
+            read_html_lab(&paths).expect("read").as_deref(),
+            Some("<html>تجربة</html>")
+        );
+        assert!(paths.data_dir.join("html-lab.html").exists());
+        assert!(!paths.data_dir.join("html-lab.html.tmp").exists());
+        let _ = std::fs::remove_dir_all(&paths.data_dir);
+    }
+
+    #[test]
+    fn rejects_bad_names_and_formats() {
+        let paths = temp_paths("attach-bad");
+        assert!(write_attachment(&paths, "AAAA", "exe").is_err());
+        assert!(write_attachment(&paths, "!!!!", "png").is_err());
+        assert!(load_attachment(&paths, "../noterust.db").is_err());
+        assert!(load_attachment(&paths, "missing.png").is_err());
+        let _ = std::fs::remove_dir_all(&paths.data_dir);
+    }
 }

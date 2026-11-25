@@ -12,14 +12,21 @@
     sortBy,
     activeFolder,
     toasts,
+    compact,
+    alwaysOnTop,
   } from "./lib/store";
   import { sendEditorCommand } from "./lib/bus";
+  import { sidebarPrefs, setSidebarCollapsed } from "./lib/sidebarPrefs";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import Sidebar from "./components/Sidebar.svelte";
   import NoteList from "./components/NoteList.svelte";
   import Editor from "./components/Editor.svelte";
   import TasksView from "./components/TasksView.svelte";
   import FinanceView from "./components/FinanceView.svelte";
   import SnippetsView from "./components/SnippetsView.svelte";
+  import WhiteboardView from "./components/WhiteboardView.svelte";
+  import AiView from "./components/AiView.svelte";
+  import HtmlView from "./components/HtmlView.svelte";
   import SettingsView from "./components/SettingsView.svelte";
   import CommandPalette from "./components/CommandPalette.svelte";
   import HelpDialog from "./components/HelpDialog.svelte";
@@ -31,7 +38,6 @@
   let calcOpen = false;
   let themeMedia: MediaQueryList | null = null;
 
-  let sidebarHidden = false;
   let sidebarWidth = 246;
   let listWidth = 322;
   const UI_KEY = "noterust.ui";
@@ -41,20 +47,18 @@
       const raw = localStorage.getItem(UI_KEY);
       if (!raw) return;
       const saved = JSON.parse(raw) as Partial<{
-        sidebarHidden: boolean;
         sidebarWidth: number;
         listWidth: number;
       }>;
       if (typeof saved.sidebarWidth === "number") sidebarWidth = clamp(saved.sidebarWidth, 200, 380);
       if (typeof saved.listWidth === "number") listWidth = clamp(saved.listWidth, 260, 520);
-      if (typeof saved.sidebarHidden === "boolean") sidebarHidden = saved.sidebarHidden;
     } catch {
       /* ignore corrupt prefs */
     }
   }
 
   function saveUi() {
-    localStorage.setItem(UI_KEY, JSON.stringify({ sidebarHidden, sidebarWidth, listWidth }));
+    localStorage.setItem(UI_KEY, JSON.stringify({ sidebarWidth, listWidth }));
   }
 
   function clamp(value: number, min: number, max: number) {
@@ -87,8 +91,39 @@
   }
 
   function toggleSidebar() {
-    sidebarHidden = !sidebarHidden;
-    saveUi();
+    setSidebarCollapsed(!$sidebarPrefs.collapsed);
+  }
+
+  // ---- Frameless window: the app draws its own title bar ----
+  const appWindow = getCurrentWindow();
+  let maximized = false;
+
+  $: windowTitle = $activeNote?.title?.trim() || "NoteRust";
+
+  function startWindowDrag(event: PointerEvent) {
+    if (event.button !== 0) return;
+    void appWindow.startDragging().catch(() => undefined);
+  }
+
+  async function toggleMaximize() {
+    try {
+      await appWindow.toggleMaximize();
+      maximized = await appWindow.isMaximized();
+    } catch {
+      /* ignore unavailable window control */
+    }
+  }
+
+  function minimizeWindow() {
+    void appWindow.minimize().catch(() => undefined);
+  }
+
+  function closeWindow() {
+    void appWindow.close().catch(() => undefined);
+  }
+
+  function startWindowResize(direction: "North" | "South" | "East" | "West" | "NorthEast" | "NorthWest" | "SouthEast" | "SouthWest") {
+    void appWindow.startResizeDragging(direction).catch(() => undefined);
   }
 
   $: theme = $settings["theme"] ?? "dark";
@@ -125,16 +160,27 @@
 
     const openCalc = () => (calcOpen = true);
     window.addEventListener("noterust:calc", openCalc);
+    window.addEventListener("contextmenu", onContextMenu);
 
     return () => {
       window.removeEventListener("keydown", onKeydown);
       window.removeEventListener("noterust:calc", openCalc);
+      window.removeEventListener("contextmenu", onContextMenu);
       themeMedia?.removeEventListener("change", applyTheme);
       for (const pending of unlisteners) {
         void pending.then((unlisten) => unlisten());
       }
     };
   });
+
+  /** The webview's own menu (Back/Refresh/Print) is never useful here; keep it
+   *  only inside text fields where copy/paste matters. */
+  function onContextMenu(event: MouseEvent) {
+    const target = event.target as HTMLElement | null;
+    const tag = target?.tagName ?? "";
+    if (tag === "INPUT" || tag === "TEXTAREA" || target?.isContentEditable) return;
+    event.preventDefault();
+  }
 
   async function bootstrap() {
     await store.loadSettings();
@@ -162,16 +208,25 @@
 
     await openPendingFiles();
     void api.refreshDailyBackup().catch(() => undefined);
+    void appWindow
+      .isMaximized()
+      .then((value) => (maximized = value))
+      .catch(() => undefined);
   }
 
   async function openPendingFiles() {
     try {
       const files = await api.openStartupFiles();
       for (const file of files) {
-        const opened = await api.openPath(file);
-        await store.openNote(opened.noteId);
-        if (opened.truncated) {
-          store.toast("الملف كبير جداً — حُمّل جزء منه فقط وقد يُمنع الحفظ.", "error");
+        // One unreadable file must not stop the rest of the batch.
+        try {
+          const opened = await api.openPath(file);
+          await store.openNote(opened.noteId);
+          if (opened.truncated) {
+            store.toast("الملف كبير جداً — حُمّل جزء منه فقط وقد يُمنع الحفظ.", "error");
+          }
+        } catch (error) {
+          store.toast(store.errorMessage(error), "error");
         }
       }
       if (files.length > 0) await store.refreshAll();
@@ -197,15 +252,32 @@
       helpOpen = true;
       return;
     }
+    if (ctrl && event.shiftKey && key === "t") {
+      event.preventDefault();
+      void store.setAlwaysOnTop(!$alwaysOnTop);
+      return;
+    }
+    if (ctrl && event.shiftKey && key === "m") {
+      event.preventDefault();
+      void store.setCompact(!$compact);
+      return;
+    }
+    if (event.key === "Escape" && $compact) {
+      event.preventDefault();
+      void store.setCompact(false);
+      return;
+    }
     if (ctrl && key === "b") {
       event.preventDefault();
       toggleSidebar();
       return;
     }
-    if (ctrl && ["1", "2", "3", "4"].includes(event.key) && !event.shiftKey) {
+    if (ctrl && ["1", "2", "3", "4", "5", "6", "7"].includes(event.key) && !event.shiftKey) {
       event.preventDefault();
       void store.setView(
-        (["notes", "tasks", "finance", "snippets"] as const)[Number(event.key) - 1],
+        (["notes", "tasks", "finance", "snippets", "board", "ai", "html"] as const)[
+          Number(event.key) - 1
+        ],
       );
       return;
     }
@@ -353,28 +425,72 @@
   }
 </script>
 
+<div class="shell">
+  {#if !$compact}
+    <header
+      class="titlebar"
+      on:pointerdown={startWindowDrag}
+      on:dblclick={() => void toggleMaximize()}
+    >
+      <span class="tb-logo">N</span>
+      <span class="tb-title">{windowTitle}</span>
+      <div class="tb-actions" on:pointerdown|stopPropagation>
+        <button class="tb-btn" title="تصغير" aria-label="تصغير" on:click={minimizeWindow}>
+          <Icon name="minimize" size={14} />
+        </button>
+        <button
+          class="tb-btn"
+          title={maximized ? "استعادة" : "تكبير"}
+          aria-label={maximized ? "استعادة" : "تكبير"}
+          on:click={() => void toggleMaximize()}
+        >
+          <Icon name={maximized ? "restore" : "maximize"} size={14} />
+        </button>
+        <button class="tb-btn close" title="إغلاق" aria-label="إغلاق" on:click={closeWindow}>
+          <Icon name="close" size={14} />
+        </button>
+      </div>
+    </header>
+  {/if}
+
 <div
   class="app"
   class:notes-mode={notesMode}
-  class:sidebar-hidden={sidebarHidden}
-  style="--sidebar-w:{sidebarWidth}px; --list-w:{listWidth}px; --font-size:{fontSize}px; --font-family:{fontStack}"
+  class:compact={$compact}
+  class:sidebar-collapsed={$sidebarPrefs.collapsed}
+  style="--sidebar-w:{$sidebarPrefs.collapsed ? 64 : sidebarWidth}px; --list-w:{listWidth}px; --font-size:{fontSize}px; --font-family:{fontStack}"
 >
-  {#if !sidebarHidden}
-    <Sidebar on:toggleSidebar={toggleSidebar} />
-    <div
-      class="resizer"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="تغيير عرض الشريط الجانبي"
-      class:dragging={resizing === "sidebar"}
-      on:pointerdown={(event) => startResize("sidebar", event)}
-    ></div>
-  {:else}
-    <div class="rail"></div>
-    <div class="rail-gap"></div>
+  {#if !$compact}
+    <Sidebar />
+    {#if !$sidebarPrefs.collapsed}
+      <div
+        class="resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="تغيير عرض الشريط الجانبي"
+        class:dragging={resizing === "sidebar"}
+        on:pointerdown={(event) => startResize("sidebar", event)}
+      ></div>
+    {:else}
+      <div class="rail-gap"></div>
+    {/if}
   {/if}
 
-  {#if notesMode}
+  {#if notesMode && $compact}
+    <div class="compact-wrap">
+      <div role="presentation" class="compact-bar" on:pointerdown={startWindowDrag}>
+        <span>وضع الملاحظة البسيطة</span>
+        <button
+          title="رجوع للنافذة الكاملة (Esc)"
+          on:pointerdown|stopPropagation
+          on:click={() => void store.setCompact(false)}
+        >
+          ⤢ رجوع
+        </button>
+      </div>
+      <Editor />
+    </div>
+  {:else if notesMode}
     <NoteList />
     <div
       class="resizer"
@@ -391,16 +507,30 @@
     <FinanceView />
   {:else if $view === "snippets"}
     <SnippetsView />
+  {:else if $view === "board"}
+    <WhiteboardView />
+  {:else if $view === "ai"}
+    <AiView />
+  {:else if $view === "html"}
+    <HtmlView />
   {:else if $view === "settings"}
     <SettingsView />
   {/if}
 </div>
 
-{#if sidebarHidden}
-  <button class="sidebar-reopen" title="إظهار الشريط الجانبي (Ctrl+B)" on:click={toggleSidebar}>
-    <Icon name="sidebar" size={17} />
-  </button>
-{/if}
+  {#if !$compact}
+    <!-- Frameless windows lose the native resize border, so the edges are
+         hot zones that start the same native resize drag. -->
+    <div role="presentation" class="rz n" on:pointerdown={() => startWindowResize("North")}></div>
+    <div role="presentation" class="rz s" on:pointerdown={() => startWindowResize("South")}></div>
+    <div role="presentation" class="rz e" on:pointerdown={() => startWindowResize("East")}></div>
+    <div role="presentation" class="rz w" on:pointerdown={() => startWindowResize("West")}></div>
+    <div role="presentation" class="rz ne" on:pointerdown={() => startWindowResize("NorthEast")}></div>
+    <div role="presentation" class="rz nw" on:pointerdown={() => startWindowResize("NorthWest")}></div>
+    <div role="presentation" class="rz se" on:pointerdown={() => startWindowResize("SouthEast")}></div>
+    <div role="presentation" class="rz sw" on:pointerdown={() => startWindowResize("SouthWest")}></div>
+  {/if}
+</div>
 
 {#if paletteOpen}
   <CommandPalette
@@ -468,13 +598,205 @@
     min-height: 0;
   }
 
-  .app.sidebar-hidden {
-    grid-template-columns: 0 0 var(--list-w) 6px 1fr;
+  /* Small sticky-note mode: one column, only the open note. */
+  .app.compact {
+    grid-template-columns: 1fr;
   }
 
-  .app.sidebar-hidden:not(.notes-mode) {
-    grid-template-columns: 0 0 0 0 1fr;
+  .app.compact > :global(*) {
+    grid-column: 1;
   }
+
+  /* ---- Frameless shell: custom title bar + resize hot zones ---- */
+  .shell {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100vh;
+    overflow: hidden;
+    background: var(--bg);
+  }
+
+  .shell > .app {
+    flex: 1;
+    height: auto;
+    min-height: 0;
+    grid-template-rows: minmax(0, 1fr);
+  }
+
+  .titlebar {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    height: 36px;
+    padding: 0 12px;
+    border-bottom: 1px solid var(--border);
+    background: var(--bg-elevated);
+    user-select: none;
+  }
+
+  .tb-logo {
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: var(--accent);
+    color: var(--accent-text);
+    font-size: 0.72em;
+    font-weight: 700;
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+  }
+
+  .tb-title {
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 0.8em;
+    color: var(--text-muted);
+  }
+
+  .tb-actions {
+    display: flex;
+    align-items: stretch;
+    align-self: stretch;
+    margin-right: 8px;
+  }
+
+  .tb-btn {
+    width: 44px;
+    display: grid;
+    place-items: center;
+    border-radius: 0;
+    color: var(--text-muted);
+    background: transparent;
+  }
+
+  .tb-btn:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .tb-btn.close:hover {
+    background: #e81123;
+    color: #fff;
+  }
+
+  .rz {
+    position: absolute;
+    z-index: 30;
+  }
+
+  .rz.n,
+  .rz.s {
+    left: 8px;
+    right: 8px;
+    height: 5px;
+  }
+
+  .rz.n {
+    top: 0;
+    cursor: ns-resize;
+  }
+
+  .rz.s {
+    bottom: 0;
+    cursor: ns-resize;
+  }
+
+  .rz.e,
+  .rz.w {
+    top: 8px;
+    bottom: 8px;
+    width: 5px;
+  }
+
+  .rz.e {
+    right: 0;
+    cursor: ew-resize;
+  }
+
+  .rz.w {
+    left: 0;
+    cursor: ew-resize;
+  }
+
+  .rz.ne,
+  .rz.nw,
+  .rz.se,
+  .rz.sw {
+    width: 10px;
+    height: 10px;
+  }
+
+  .rz.ne {
+    top: 0;
+    right: 0;
+    cursor: nesw-resize;
+  }
+
+  .rz.nw {
+    top: 0;
+    left: 0;
+    cursor: nwse-resize;
+  }
+
+  .rz.se {
+    bottom: 0;
+    right: 0;
+    cursor: nwse-resize;
+  }
+
+  .rz.sw {
+    bottom: 0;
+    left: 0;
+    cursor: nesw-resize;
+  }
+
+  .compact-wrap {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  .compact-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 3px 10px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--border);
+    color: var(--text-dim);
+    font-size: 0.74em;
+    flex: 0 0 auto;
+  }
+
+  .compact-bar button {
+    background: transparent;
+    border: 1px solid var(--border);
+    color: var(--text-dim);
+    border-radius: 999px;
+    padding: 1px 10px;
+    font-family: inherit;
+    font-size: 1em;
+    cursor: pointer;
+  }
+
+  .compact-bar button:hover {
+    color: var(--text);
+    border-color: var(--accent);
+  }
+
+  .compact-wrap > :global(.editor-pane) {
+    flex: 1;
+    min-height: 0;
+  }
+
 
   .resizer {
     cursor: col-resize;

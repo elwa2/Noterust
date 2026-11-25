@@ -11,9 +11,12 @@
     lastSavedAt,
     settings,
     fileChangeNotice,
+    alwaysOnTop,
+    compact,
   } from "../lib/store";
   import { arabicDateTime, NOUNS, plural } from "../lib/format";
-  import { renderMarkdown } from "../lib/markdown";
+  import { renderMarkdown, setImageOptions } from "../lib/markdown";
+  import { htmlToMarkdown } from "../lib/htmlToMarkdown";
   import { editorCommand } from "../lib/bus";
   import type { EditorCommand } from "../lib/bus";
   import type { Note } from "../lib/types";
@@ -59,7 +62,15 @@
   let formatOpen = false;
   /** Rendered Markdown preview instead of the raw textarea. */
   let preview = false;
+  /** Rendered preview HTML; refreshed only when the user is not editing it. */
+  let previewHtml = "";
+  /** True while the caret is inside the editable preview. */
+  let readerEditing = false;
   let colorOpen = false;
+  /** Pasted images, loaded from disk as `data:` URLs for the preview. */
+  let imageAssets: Record<string, string> = {};
+  const loadingImages = new Set<string>();
+  let readerEl: HTMLElement | null = null;
 
   let lockMode: "lock" | "remove" | null = null;
   let versionsOpen = false;
@@ -74,12 +85,16 @@
 
   $: note = $activeNote;
   $: wrap = ($settings["word_wrap"] ?? "true") === "true";
+  let directionAttr: "ltr" | "rtl" | "auto" = "auto";
   $: directionAttr =
     note?.direction === "ltr" ? "ltr" : note?.direction === "rtl" ? "rtl" : "auto";
   $: sessionPassword = note ? (passwords[note.id] ?? null) : null;
   $: lockedView = !!note && note.isLocked && !sessionPassword;
   $: matches = computeMatches();
-  $: previewHtml = preview ? renderMarkdown(content) : "";
+  // While the preview has the caret, its DOM is the source of truth: re-rendering
+  // it would throw the caret away mid-typing.
+  $: if (preview && !readerEditing) previewHtml = renderMarkdown(content, imageAssets);
+  $: if (!preview) previewHtml = "";
   $: externalChanged = !!note && $fileChangeNotice === note.id;
   $: trashed = !!note?.deletedAt;
   $: trashDaysLeft = note?.deletedAt
@@ -89,6 +104,12 @@
           Math.floor((Date.now() - note.deletedAt) / 86_400_000),
       )
     : 0;
+
+  $: if (content) void loadNoteImages(content);
+  $: if (preview) {
+    void previewHtml;
+    void refreshReader();
+  }
 
   $: if (note) {
     const key = `${note.id}:${passwords[note.id] ?? ""}`;
@@ -132,6 +153,7 @@
 
   async function hydrate(current: Note) {
     unlockError = "";
+    readerEditing = false;
     loadedNote = current;
     if (current.isLocked) {
       const password = passwords[current.id];
@@ -678,6 +700,191 @@
     updateSlash();
   }
 
+  /** Typing in the rendered preview writes Markdown back into the note. */
+  function onReaderInput() {
+    if (trashed || lockedView || !readerEl) return;
+    readerEditing = true;
+    content = htmlToMarkdown(readerEl);
+    markDirty();
+  }
+
+  /** Saves a clipboard image and links it in the note. */
+  async function attachImage(image: File, at: "textarea" | "reader") {
+    const ext = (image.type.split("/")[1] ?? "png").toLowerCase();
+    try {
+      const base64 = (await readFileAsBase64(image)).split(",")[1] ?? "";
+      const name = await api.saveAttachment(base64, ext);
+      const markdown = `\n![صورة](noteimg://${name})\n`;
+      if (at === "textarea") {
+        insertText(markdown);
+      } else if (readerEl) {
+        readerEl.focus();
+        document.execCommand("insertText", false, markdown);
+        readerEditing = false;
+        previewHtml = renderMarkdown(content, imageAssets);
+        void tick().then(refreshReader);
+      }
+      store.toast("أُضيفت الصورة");
+    } catch (error) {
+      store.toast(store.errorMessage(error), "error");
+    }
+  }
+
+  function clipboardImage(event: ClipboardEvent): File | undefined {
+    const items = event.clipboardData?.items;
+    if (!items) return undefined;
+    return Array.from(items)
+      .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+      .map((item) => item.getAsFile())
+      .find((file): file is File => !!file);
+  }
+
+  /** Image files in the clipboard are saved to disk and linked in the note. */
+  async function onTextareaPaste(event: ClipboardEvent) {
+    if (trashed || note?.isLocked) return;
+    const image = clipboardImage(event);
+    if (!image) return;
+    event.preventDefault();
+    await attachImage(image, "textarea");
+  }
+
+  /** Inside the preview, images are attached and text is pasted as plain text. */
+  async function onReaderPaste(event: ClipboardEvent) {
+    if (trashed || lockedView) return;
+    const image = clipboardImage(event);
+    if (image) {
+      event.preventDefault();
+      await attachImage(image, "reader");
+      return;
+    }
+    const text = event.clipboardData?.getData("text/plain");
+    if (text === undefined) return;
+    event.preventDefault();
+    document.execCommand("insertText", false, text);
+  }
+
+  function readFileAsBase64(file: File): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(String(reader.result ?? ""));
+      reader.onerror = () => reject(reader.error ?? new Error("تعذر قراءة الصورة"));
+      reader.readAsDataURL(file);
+    });
+  }
+
+  /** Loads every `noteimg://` file the note references, once per file. */
+  async function loadNoteImages(text: string) {
+    const names = new Set<string>();
+    for (const match of text.matchAll(/!\[[^\]]*\]\(noteimg:\/\/([^)\s]+)/g)) {
+      names.add(match[1]);
+    }
+    for (const name of names) {
+      if (imageAssets[name] !== undefined || loadingImages.has(name)) continue;
+      loadingImages.add(name);
+      try {
+        const url = await api.readAttachment(name);
+        imageAssets = { ...imageAssets, [name]: url };
+      } catch {
+        imageAssets = { ...imageAssets, [name]: "" };
+      } finally {
+        loadingImages.delete(name);
+      }
+    }
+  }
+
+  async function copyCode(text: string) {
+    try {
+      await navigator.clipboard.writeText(text);
+      store.toast("تم نسخ الكود كاملاً");
+    } catch {
+      store.toast("تعذر النسخ", "error");
+    }
+  }
+
+  /** Zoom/rotate buttons and the code-block copy button live in the preview. */
+  function onReaderClick(event: MouseEvent) {
+    const button = (event.target as HTMLElement).closest<HTMLElement>("button[data-act]");
+    if (!button) return;
+    if (button.dataset.act === "copy-code") {
+      event.preventDefault();
+      const code = button.parentElement?.querySelector("code")?.textContent ?? "";
+      void copyCode(code);
+      return;
+    }
+    const figure = button.closest<HTMLElement>(".md-image");
+    if (!figure) return;
+    event.preventDefault();
+    const index = Number(figure.dataset.img ?? "-1");
+    if (index < 0) return;
+    const image = figure.querySelector("img");
+    const width = Number(figure.dataset.w ?? "0") || Math.round(image?.clientWidth ?? 0);
+    const rotation = Number(figure.dataset.r ?? "0");
+    let nextWidth = width;
+    let nextRotation = rotation;
+    switch (button.dataset.act) {
+      case "zoom-in":
+        nextWidth = Math.min(4000, Math.round(width * 1.25));
+        break;
+      case "zoom-out":
+        nextWidth = Math.max(40, Math.round(width / 1.25));
+        break;
+      case "rotate-left":
+        nextRotation = (rotation + 270) % 360;
+        break;
+      case "rotate-right":
+        nextRotation = (rotation + 90) % 360;
+        break;
+      case "reset":
+        nextWidth = 0;
+        nextRotation = 0;
+        break;
+      default:
+        return;
+    }
+    content = setImageOptions(content, index, { width: nextWidth, rotation: nextRotation });
+    markDirty();
+    readerEditing = false;
+    previewHtml = renderMarkdown(content, imageAssets);
+    void tick().then(() => {
+      layoutImages();
+      void refreshReader();
+    });
+  }
+
+  /** Rotated images are painted turned, so their box height follows the width. */
+  function layoutImages() {
+    if (!readerEl) return;
+    const available = Math.max(220, readerEl.clientWidth - 56);
+    const visualLimit = Math.max(240, Math.round(window.innerHeight * 0.62));
+    for (const figure of readerEl.querySelectorAll<HTMLElement>(".md-image")) {
+      const frame = figure.querySelector<HTMLElement>(".md-image-frame");
+      const image = frame?.querySelector("img");
+      if (!frame || !image) continue;
+      const rotation = ((Number(figure.dataset.r ?? "0") % 360) + 360) % 360;
+      if (rotation % 180 === 0) {
+        frame.style.height = "";
+        image.style.maxWidth = "";
+        continue;
+      }
+      const ratio = image.naturalWidth ? image.naturalHeight / image.naturalWidth : 1;
+      const wanted = Number(figure.dataset.w ?? "0") || image.offsetWidth || available;
+      const width = Math.round(
+        Math.min(wanted, visualLimit, available / Math.max(ratio, 0.05)),
+      );
+      image.style.maxWidth = `${width}px`;
+      frame.style.height = `${width}px`;
+    }
+  }
+
+  async function refreshReader() {
+    await tick();
+    if (!preview || !readerEl) return;
+    for (const image of readerEl.querySelectorAll("img")) {
+      if (!image.complete) image.addEventListener("load", layoutImages, { once: true });
+    }
+    layoutImages();
+  }
+
   function onWheel(event: WheelEvent) {
     if (!event.ctrlKey) return;
     event.preventDefault();
@@ -785,13 +992,19 @@
   function togglePreview() {
     preview = !preview;
     closePopovers();
-    if (!preview) void tick().then(() => textarea?.focus());
+    readerEditing = false;
+    if (preview) {
+      previewHtml = renderMarkdown(content, imageAssets);
+      void tick().then(refreshReader);
+    } else {
+      void tick().then(() => textarea?.focus());
+    }
   }
 </script>
 
 <svelte:window on:click={closePopovers} />
 
-<section class="editor-pane">
+<section class="editor-pane" class:compact={$compact}>
   <div class="tabs">
     <div class="tab-strip">
       {#each $tabs as tab (tab.id)}
@@ -809,13 +1022,28 @@
   </div>
 
   {#if !note}
-    <div class="empty">
+    <div
+      class="empty click-target"
+      role="button"
+      tabindex="0"
+      aria-label="إنشاء ملاحظة جديدة"
+      title="اضغط في أي مكان لإنشاء ملاحظة جديدة"
+      on:click={() => void store.createNote()}
+      on:keydown={(event) => {
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          void store.createNote();
+        }
+      }}
+    >
       <div class="empty-mark"><Icon name="notes" size={44} /></div>
       <h3>لا ملاحظة مفتوحة</h3>
-      <p class="muted">اختر ملاحظة من القائمة أو أنشئ ملاحظة جديدة للبدء.</p>
+      <p class="muted">اضغط في أي مكان هنا لإنشاء ملاحظة جديدة فوراً.</p>
       <div class="row">
-        <button class="btn primary" on:click={() => store.createNote()}>＋ ملاحظة جديدة</button>
-        <button class="btn" on:click={() => store.setView("tasks")}>المهام</button>
+        <button class="btn primary" on:click|stopPropagation={() => store.createNote()}>
+          ＋ ملاحظة جديدة
+        </button>
+        <button class="btn" on:click|stopPropagation={() => store.setView("tasks")}>المهام</button>
       </div>
     </div>
   {:else}
@@ -886,6 +1114,18 @@
         title={preview ? "تحرير النص (Ctrl+E)" : "معاينة Markdown منسّقة (Ctrl+E)"}
         on:click={togglePreview}
         >{preview ? "✎" : "👁"}</button
+      >
+      <button
+        class="icon-btn"
+        class:active={$alwaysOnTop}
+        title={$alwaysOnTop ? "إلغاء البقاء فوق كل البرامج" : "البقاء فوق كل البرامج (Ctrl+Shift+T)"}
+        on:click={() => store.setAlwaysOnTop(!$alwaysOnTop)}>📌</button
+      >
+      <button
+        class="icon-btn"
+        class:active={$compact}
+        title="وضع الملاحظة البسيطة فوق كل شي (Ctrl+Shift+M)"
+        on:click={() => store.setCompact(!$compact)}>🗗</button
       >
       <button
         class="icon-btn"
@@ -1001,11 +1241,30 @@
 
       <div class="body">
         {#if preview}
-          <div class="reader scroll" dir={directionAttr}>
+          <div
+            class="reader scroll"
+            class:editing={readerEditing}
+            dir={directionAttr}
+            bind:this={readerEl}
+            role="textbox"
+            aria-multiline="true"
+            aria-label="محرر المعاينة"
+            tabindex="0"
+            contenteditable={!trashed && !lockedView}
+            spellcheck="false"
+            on:click={onReaderClick}
+            on:input={onReaderInput}
+            on:paste={onReaderPaste}
+            on:focus={() => (readerEditing = true)}
+            on:blur={() => {
+              readerEditing = false;
+              if (dirty) void saveNow();
+            }}
+          >
             {#if content.trim()}
               {@html previewHtml}
             {:else}
-              <p class="faint">لا يوجد نص للمعاينة بعد.</p>
+              <p class="faint" contenteditable="false">لا يوجد نص للمعاينة بعد.</p>
             {/if}
           </div>
         {:else}
@@ -1020,6 +1279,7 @@
             readonly={trashed}
             placeholder="اكتب، أو اضغط «/» لإدراج عنصر"
             on:input={onTextareaInput}
+            on:paste={onTextareaPaste}
             on:keydown={onTextareaKeydown}
             on:wheel={onWheel}
             on:blur={() => dirty && void saveNow()}
@@ -1100,6 +1360,12 @@
     min-width: 0;
     background: var(--bg);
     position: relative;
+  }
+
+  /* Sticky-note mode: no tab strip, no folder picker — just the note. */
+  .editor-pane.compact .tabs,
+  .editor-pane.compact .move {
+    display: none;
   }
 
   .tabs {
@@ -1402,6 +1668,16 @@
     overflow-wrap: anywhere;
   }
 
+  .reader[contenteditable="true"] {
+    outline: none;
+    cursor: text;
+  }
+
+  /* Image controls stay clickable while the preview is editable. */
+  .reader :global(.md-image) {
+    user-select: none;
+  }
+
   .reader :global(h1),
   .reader :global(h2),
   .reader :global(h3),
@@ -1428,6 +1704,78 @@
 
   .reader :global(p) {
     margin: 0 0 0.9em;
+  }
+
+  /* Images: pasted screenshots plus zoom/rotate controls under each one. */
+  .reader :global(.md-image) {
+    margin: 1.1em 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .reader :global(.md-image-frame) {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    max-width: 100%;
+  }
+
+  /* An explicit zoom width may exceed the pane; the reader scrolls sideways. */
+  .reader :global(.md-image[data-w]:not([data-w="0"]) .md-image-frame),
+  .reader :global(.md-image[data-w]:not([data-w="0"]) img) {
+    max-width: none;
+  }
+
+  .reader :global(.md-image img) {
+    display: block;
+    max-width: 100%;
+    height: auto;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-hover);
+  }
+
+  .reader :global(.md-image-tools) {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    padding: 2px 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-hover);
+    font-size: 0.74em;
+    color: var(--text-faint);
+    opacity: 0.7;
+    transition: opacity 0.15s ease;
+  }
+
+  .reader :global(.md-image):hover :global(.md-image-tools) {
+    opacity: 1;
+  }
+
+  .reader :global(.md-image-tools button) {
+    background: transparent;
+    border: 0;
+    color: var(--text-muted, var(--text-faint));
+    cursor: pointer;
+    padding: 1px 7px;
+    border-radius: 999px;
+    font-family: inherit;
+    font-size: 1em;
+    line-height: 1.7;
+  }
+
+  .reader :global(.md-image-tools button:hover) {
+    background: var(--border);
+    color: var(--text);
+  }
+
+  .reader :global(.md-image-zoom) {
+    min-width: 46px;
+    text-align: center;
+    font-variant-numeric: tabular-nums;
   }
 
   .reader :global(a) {
@@ -1522,6 +1870,34 @@
     font-size: 0.86em;
   }
 
+  .reader :global(.md-code-block) {
+    position: relative;
+    margin: 0 0 1em;
+  }
+
+  .reader :global(.md-copy) {
+    position: absolute;
+    top: 7px;
+    left: 8px;
+    z-index: 2;
+    padding: 3px 10px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    font-size: 0.72em;
+    cursor: pointer;
+  }
+
+  .reader :global(.md-copy:hover) {
+    color: var(--accent);
+    border-color: var(--accent);
+  }
+
+  .reader :global(.md-code-block pre.md-code) {
+    margin: 0;
+  }
+
   .reader :global(pre.md-code) {
     direction: ltr;
     text-align: left;
@@ -1591,6 +1967,14 @@
   .text.nowrap {
     white-space: pre;
     overflow-x: auto;
+  }
+
+  .empty.click-target {
+    cursor: pointer;
+  }
+
+  .empty.click-target:hover {
+    background: color-mix(in srgb, var(--bg-hover) 45%, transparent);
   }
 
   .empty {

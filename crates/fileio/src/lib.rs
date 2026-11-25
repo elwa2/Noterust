@@ -54,29 +54,97 @@ pub fn detect_encoding(bytes: &[u8]) -> &'static Encoding {
     if let Some((encoding, _bom_len)) = Encoding::for_bom(bytes) {
         return encoding;
     }
-    if looks_like_utf16(bytes) {
-        return if bytes.len() >= 2 && bytes[1] == 0 {
-            UTF_16LE
-        } else {
-            UTF_16BE
-        };
+    if let Some(encoding) = utf16_lane(bytes) {
+        return encoding;
+    }
+    // Only files with NUL bytes need the slower decoding probe.
+    if bytes.contains(&0) {
+        if let Some(encoding) = sniff_utf16(bytes) {
+            return encoding;
+        }
     }
     let mut detector = chardetng::EncodingDetector::new();
     detector.feed(bytes, true);
     detector.guess(None, true)
 }
 
-/// Heuristic: ASCII text interleaved with NUL bytes is UTF-16 without a BOM.
-fn looks_like_utf16(bytes: &[u8]) -> bool {
+/// Share of characters that never appear in ordinary text (control codes and
+/// C1 range), used to score a UTF-16 decoding attempt.
+/// Scores one UTF-16 byte order: `Some((bad, familiar))`, the share of control
+/// characters and of characters in ranges ordinary text actually uses.
+fn utf16_quality(bytes: &[u8], encoding: &'static Encoding) -> Option<(f64, f64)> {
+    let even = bytes.len() - bytes.len() % 2;
+    if even < 8 {
+        return None;
+    }
+    // A trailing split surrogate is normal when the sample was cut mid-file.
+    let (text, _had_errors) = encoding.decode_without_bom_handling(&bytes[..even]);
+    let total = text.chars().count();
+    if total == 0 {
+        return None;
+    }
+    let mut odd = 0usize;
+    let mut familiar = 0usize;
+    for c in text.chars() {
+        let code = c as u32;
+        let is_control =
+            (code < 0x20 && c != '\t' && c != '\n' && c != '\r') || (0x7f..0xa0).contains(&code);
+        if is_control {
+            odd += 1;
+        }
+        let known = matches!(code,
+            0x20..=0x7e
+            | 0x00a0..=0x024f
+            | 0x0600..=0x06ff
+            | 0x0750..=0x077f
+            | 0x2000..=0x206f
+            | 0x20aa | 0x20ac
+            | 0xfb50..=0xfdff
+            | 0xfe70..=0xfeff
+        );
+        if known {
+            familiar += 1;
+        }
+    }
+    Some((odd as f64 / total as f64, familiar as f64 / total as f64))
+}
+
+/// BOM-less UTF-16 that only contains Arabic text has almost no NUL bytes, so
+/// the lane pattern above misses it. Decoding both byte orders and keeping the
+/// one that reads like human text catches those files — while random binary
+/// bytes (images, archives) score near zero on familiar characters.
+pub fn sniff_utf16(bytes: &[u8]) -> Option<&'static Encoding> {
+    let sample = &bytes[..bytes.len().min(8192)];
+    if sample.len() < 8 {
+        return None;
+    }
+    let usable = |quality: Option<(f64, f64)>| match quality {
+        Some((bad, familiar)) if bad < 0.02 && familiar > 0.5 => Some(bad - familiar),
+        _ => None,
+    };
+    let le = usable(utf16_quality(sample, UTF_16LE));
+    let be = usable(utf16_quality(sample, UTF_16BE));
+    match (le, be) {
+        (Some(left), Some(right)) if left <= right => Some(UTF_16LE),
+        (Some(_), Some(_)) => Some(UTF_16BE),
+        (Some(_), None) => Some(UTF_16LE),
+        (None, Some(_)) => Some(UTF_16BE),
+        (None, None) => None,
+    }
+}
+
+/// Heuristic: text interleaved with NUL bytes in a single byte lane is UTF-16
+/// without a BOM. The lane that holds the NUL bytes tells the byte order:.
+fn utf16_lane(bytes: &[u8]) -> Option<&'static Encoding> {
     // BOM-less UTF-16 is only guessed for reasonably large samples: a short
     // byte run with a zero in every other position is far more likely binary.
     if bytes.len() < 8 {
-        return false;
+        return None;
     }
     let sample = &bytes[..bytes.len().min(4096)];
     let half = sample.len() / 2;
     if half == 0 {
-        return false;
+        return None;
     }
     let nul_even = sample.iter().step_by(2).filter(|b| **b == 0).count() as f64 / half as f64;
     let nul_odd = sample
@@ -86,8 +154,23 @@ fn looks_like_utf16(bytes: &[u8]) -> bool {
         .filter(|b| **b == 0)
         .count() as f64
         / half as f64;
-    // One lane is mostly NUL and the other is mostly text.
-    (nul_even > 0.4 && nul_odd < 0.05) || (nul_odd > 0.4 && nul_even < 0.05)
+    // Most characters are ASCII: one lane is almost all NUL. NUL bytes in the
+    // odd lane mean the low byte of each little-endian unit is the text.
+    if nul_odd > 0.4 && nul_even < 0.05 {
+        return Some(UTF_16LE);
+    }
+    if nul_even > 0.4 && nul_odd < 0.05 {
+        return Some(UTF_16BE);
+    }
+    // Arabic (and other non-Latin) UTF-16 only leaves NULs where the text is
+    // ASCII, so the ratio is low — but the NULs still sit in one lane only.
+    if nul_odd > 0.02 && nul_even == 0.0 {
+        return Some(UTF_16LE);
+    }
+    if nul_even > 0.02 && nul_odd == 0.0 {
+        return Some(UTF_16BE);
+    }
+    None
 }
 
 /// Resolves a user supplied encoding name to an `encoding_rs` encoding.
@@ -138,10 +221,20 @@ pub fn apply_line_ending(text: &str, line_ending: &str) -> String {
 pub fn is_probably_binary(bytes: &[u8]) -> bool {
     // A BOM is conclusive: text may legitimately contain NUL bytes when it is
     // UTF-16 with only ASCII characters.
-    if Encoding::for_bom(bytes).is_some() || looks_like_utf16(bytes) {
+    if Encoding::for_bom(bytes).is_some() || utf16_lane(bytes).is_some() {
         return false;
     }
-    bytes.iter().take(4096).any(|b| *b == 0)
+    let sample = &bytes[..bytes.len().min(4096)];
+    if !sample.contains(&0) {
+        return false;
+    }
+    // Arabic or CJK UTF-16 keeps its high byte non-zero, so a file that is
+    // mostly Arabic still contains NUL bytes from its ASCII parts. Give such a
+    // file a chance to prove it is text before calling it binary.
+    if sniff_utf16(sample).is_some() {
+        return false;
+    }
+    true
 }
 
 /// Reads and decodes a text file, preserving its detected metadata.
@@ -369,6 +462,27 @@ mod tests {
     fn binary_files_are_flagged() {
         assert!(is_probably_binary(&[0, 1, 2, 3]));
         assert!(!is_probably_binary("نص".as_bytes()));
+        // Random bytes with NULs must stay binary even though they decode as
+        // syntactically valid UTF-16 code units.
+        let noise: Vec<u8> = (0..512u32)
+            .map(|i| (i.wrapping_mul(97) % 256) as u8)
+            .collect();
+        assert!(is_probably_binary(&noise));
+    }
+
+    #[test]
+    fn bomless_utf16_arabic_is_text() {
+        // Mixed Arabic + ASCII in UTF-16LE without a BOM: the ASCII parts leave
+        // NUL bytes behind, which used to look like a binary file.
+        let text = "المكتب admin 192.168.1.79\nالمكتب admin 10.0.0.1\n";
+        let mut bytes = Vec::new();
+        for unit in text.encode_utf16() {
+            bytes.extend_from_slice(&unit.to_le_bytes());
+        }
+        assert!(!is_probably_binary(&bytes));
+        assert_eq!(detect_encoding(&bytes).name(), "UTF-16LE");
+        let (decoded, _) = detect_encoding(&bytes).decode_without_bom_handling(&bytes);
+        assert_eq!(decoded, text);
     }
 
     #[test]

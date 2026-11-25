@@ -5,6 +5,7 @@
 //! explicit transaction; the database runs in WAL mode with
 //! `synchronous = NORMAL`, which keeps commits crash-safe while staying fast.
 
+pub mod ai;
 pub mod backup;
 pub mod export;
 pub mod finance;
@@ -22,6 +23,7 @@ use std::path::{Path, PathBuf};
 use rusqlite::Connection;
 use thiserror::Error;
 
+pub use ai::AiConnection;
 pub use noterust_core::{
     Category, MonthlySummary, Note, NoteSummary, NoteVersion, SearchHit, Snippet, SortBy, Tag,
     TaskItem, TransactionItem,

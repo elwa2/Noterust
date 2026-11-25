@@ -8,6 +8,9 @@ ui/dist/
 
 # Built executables and installers (ship these as GitHub Releases)
 /NoteRust.exe
+/release/
+/*-shot.png
+/board-notes.png
 *.exe
 *.msi
 *.pdb
@@ -27,6 +30,9 @@ _smoke/
 .idea/
 .DS_Store
 Thumbs.db
+
+# Dev screenshots
+.mdcheck*
 
 # Secrets and local env files
 .env

@@ -11,6 +11,8 @@ pub struct Paths {
     pub db_path: PathBuf,
     pub backup_dir: PathBuf,
     pub log_dir: PathBuf,
+    /// Images pasted into notes (`noteimg://<file>`).
+    pub assets_dir: PathBuf,
     /// True when a `portable.flag` file sits next to the executable.
     pub portable: bool,
 }
@@ -41,6 +43,7 @@ impl Paths {
             db_path: data_dir.join("noterust.db"),
             backup_dir: data_dir.join("backups"),
             log_dir: data_dir.join("logs"),
+            assets_dir: data_dir.join("assets"),
             data_dir,
             portable,
         }
@@ -51,6 +54,7 @@ impl Paths {
         std::fs::create_dir_all(&self.data_dir)?;
         std::fs::create_dir_all(&self.backup_dir)?;
         std::fs::create_dir_all(&self.log_dir)?;
+        std::fs::create_dir_all(&self.assets_dir)?;
         Ok(())
     }
 }
