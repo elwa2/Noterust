@@ -84,7 +84,7 @@
   }
 </script>
 
-<Modal title={tab === "calc" ? "الآلة الحاسبة" : "عدّ الفلوس"} on:close={() => dispatch("close")}>
+<Modal title={tab === "calc" ? "الآلة الحاسبة" : "عدّ الفلوس"} wide={tab === "money"} on:close={() => dispatch("close")}>
   <div class="tabs">
     <button class="tab" class:active={tab === "calc"} on:click={() => (tab = "calc")}>
       <Icon name="calculator" size={14} /> حساب

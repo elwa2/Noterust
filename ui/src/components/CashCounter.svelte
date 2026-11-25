@@ -2,29 +2,75 @@
   import {
     NOTE_VALS,
     breakdownNotes,
+    bundleTotal,
     formatCount,
     formatMoney,
+    notesTotal,
+    packTotal,
     parseCount,
     parseMoney,
   } from "../lib/money";
 
-  /** Typed note counts, in `NOTE_VALS` order. */
-  let counts: string[] = [];
+  /** Typed bundle counts, in `NOTE_VALS` order — one رابطة = 5 باكوهات. */
+  let bundleCounts: string[] = [];
+  /** Typed pack counts, in `NOTE_VALS` order — one باكو = 100 ورقة. */
+  let packCounts: string[] = [];
+  /** Typed loose note counts, in `NOTE_VALS` order. */
+  let noteCounts: string[] = [];
   /** Change amount, written directly and added to the total as it is. */
   let change = "";
   /** The amount to break down into banknotes. */
   let amount = "";
 
   $: rows = NOTE_VALS.map((value, index) => {
-    const count = parseCount(counts[index] ?? "");
-    return { value, count, subtotal: count * value };
+    const bundles = parseCount(bundleCounts[index] ?? "");
+    const packs = parseCount(packCounts[index] ?? "");
+    const notes = parseCount(noteCounts[index] ?? "");
+    const bundleValue = bundleTotal(value, bundles);
+    const packValue = packTotal(value, packs);
+    const noteValue = notesTotal(value, notes);
+    return {
+      value,
+      bundles,
+      packs,
+      notes,
+      bundleValue,
+      packValue,
+      noteValue,
+      subtotal: bundleValue + packValue + noteValue,
+    };
   });
   $: changeValue = parseMoney(change);
   $: countedTotal = rows.reduce((sum, row) => sum + row.subtotal, 0) + changeValue;
+  $: bundlesTotal = rows.reduce((sum, row) => sum + row.bundleValue, 0);
+  $: packsTotal = rows.reduce((sum, row) => sum + row.packValue, 0);
+  $: notesTotalSum = rows.reduce((sum, row) => sum + row.noteValue, 0);
 
   $: target = parseMoney(amount);
   $: breakdown = target > 0 ? breakdownNotes(target) : null;
   $: brokenTotal = breakdown ? breakdown.rows.reduce((sum, row) => sum + row.subtotal, 0) : 0;
+
+  /**
+   * Enter moves to the cell right below the current one, exactly like a
+   * spreadsheet. The row under the last note is the «مبلغ فكة» field, and the
+   * one under that is the amount to break down.
+   */
+  function onEnter(event: KeyboardEvent, column: "bundles" | "packs" | "notes", index: number) {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+    const next = document.getElementById(`cc-${column}-${index + 1}`);
+    if (next instanceof HTMLInputElement) {
+      next.focus();
+      next.select();
+      return;
+    }
+    const fallback =
+      column === "notes" ? document.getElementById("cc-change") : document.getElementById("cc-amount");
+    if (fallback instanceof HTMLInputElement) {
+      fallback.focus();
+      fallback.select();
+    }
+  }
 
   /** Moves the counted total into the breakdown field. */
   function useCountedTotal() {
@@ -35,12 +81,19 @@
 <div class="money">
   <section>
     <h3>عدّ الملاحظات</h3>
-    <p class="faint">اكتب عدد الملاحظات لكل فئة — أو اكتب مبلغ الفكة مباشرة في سطر «مبلغ فكة».</p>
+    <p class="faint">
+      اكتب عدد الروابط والباكوهات والأوراق لكل فئة — 1 رابطة = 5 باكوهات = 500 ورقة، و1 باكو = 100 ورقة.
+      اضغط Enter في أي مربع عشان تنزل للمربع اللي تحته.
+    </p>
     <table class="money-table">
       <thead>
         <tr>
           <th>الفئة</th>
-          <th>العدد</th>
+          <th>روابط</th>
+          <th>باكوهات</th>
+          <th>أوراق</th>
+          <th title="الفئة × عدد الروابط × 100 × 5">قيمة الروابط</th>
+          <th title="الفئة × عدد الباكوهات × 100">قيمة الباكوهات</th>
           <th>المجموع</th>
         </tr>
       </thead>
@@ -50,22 +103,53 @@
             <td class="value">{row.value}</td>
             <td>
               <input
+                id="cc-bundles-{index}"
                 class="num"
                 type="text"
                 inputmode="numeric"
                 placeholder="0"
                 dir="ltr"
-                aria-label="عدد الملاحظات فئة {row.value}"
-                bind:value={counts[index]}
+                aria-label="عدد الروابط فئة {row.value}"
+                bind:value={bundleCounts[index]}
+                on:keydown={(event) => onEnter(event, "bundles", index)}
               />
             </td>
+            <td>
+              <input
+                id="cc-packs-{index}"
+                class="num"
+                type="text"
+                inputmode="numeric"
+                placeholder="0"
+                dir="ltr"
+                aria-label="عدد الباكوهات فئة {row.value}"
+                bind:value={packCounts[index]}
+                on:keydown={(event) => onEnter(event, "packs", index)}
+              />
+            </td>
+            <td>
+              <input
+                id="cc-notes-{index}"
+                class="num"
+                type="text"
+                inputmode="numeric"
+                placeholder="0"
+                dir="ltr"
+                aria-label="عدد الأوراق فئة {row.value}"
+                bind:value={noteCounts[index]}
+                on:keydown={(event) => onEnter(event, "notes", index)}
+              />
+            </td>
+            <td class="value" dir="ltr">{formatMoney(row.bundleValue)}</td>
+            <td class="value" dir="ltr">{formatMoney(row.packValue)}</td>
             <td class="value" dir="ltr">{formatMoney(row.subtotal)}</td>
           </tr>
         {/each}
         <tr class="change">
-          <td class="value">مبلغ فكة</td>
+          <td colspan="3" class="value">مبلغ فكة</td>
           <td>
             <input
+              id="cc-change"
               class="num"
               type="text"
               inputmode="decimal"
@@ -74,25 +158,41 @@
               aria-label="مبلغ الفكة"
               title="اكتب مبلغ الفكة مباشرة — بيتجمع على الإجمالي زي ما هو"
               bind:value={change}
+              on:keydown={(event) => {
+                if (event.key !== "Enter") return;
+                event.preventDefault();
+                const next = document.getElementById("cc-amount");
+                if (next instanceof HTMLInputElement) {
+                  next.focus();
+                  next.select();
+                }
+              }}
             />
           </td>
+          <td></td>
+          <td></td>
           <td class="value" dir="ltr">{formatMoney(changeValue)}</td>
         </tr>
       </tbody>
       <tfoot>
         <tr>
-          <td>الإجمالي</td>
-          <td></td>
+          <td colspan="4">الإجمالي</td>
+          <td class="value" dir="ltr">{formatMoney(bundlesTotal)}</td>
+          <td class="value" dir="ltr">{formatMoney(packsTotal)}</td>
           <td class="value total" dir="ltr">{formatMoney(countedTotal)}</td>
         </tr>
       </tfoot>
     </table>
+    <p class="faint">
+      مجموع الأوراق المفردة: {formatMoney(notesTotalSum)} — والمجموع النهائي {formatMoney(countedTotal)}.
+    </p>
   </section>
 
   <section>
     <h3>فك مبلغ إلى أوراق</h3>
     <div class="row">
       <input
+        id="cc-amount"
         class="num amount"
         type="text"
         inputmode="decimal"
@@ -150,7 +250,7 @@
     display: flex;
     flex-direction: column;
     gap: 18px;
-    min-width: min(480px, 82vw);
+    min-width: min(760px, 88vw);
   }
 
   h3 {
@@ -176,12 +276,12 @@
   }
 
   .num {
-    width: 120px;
+    width: 72px;
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius-sm);
-    padding: 7px 10px;
-    font-size: 0.9em;
+    padding: 6px 8px;
+    font-size: 0.88em;
     text-align: right;
   }
 
@@ -199,16 +299,17 @@
   .money-table {
     width: 100%;
     border-collapse: collapse;
-    font-size: 0.88em;
+    font-size: 0.85em;
   }
 
   .money-table th {
     text-align: right;
     font-weight: 600;
     color: var(--text-muted);
-    font-size: 0.92em;
+    font-size: 0.9em;
     padding: 4px 6px;
     border-bottom: 1px solid var(--border);
+    white-space: nowrap;
   }
 
   .money-table td {

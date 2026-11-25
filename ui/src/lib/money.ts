@@ -11,6 +11,30 @@ import { parseAmount } from "./format";
 /** فئات الأوراق بالجنيه المصري. */
 export const NOTE_VALS = [200, 100, 50, 20, 10, 5, 1];
 
+/** عدد الورق في الباكو الواحد. */
+export const NOTES_PER_PACK = 100;
+
+/** عدد الباكوهات في الربطة الواحدة. */
+export const PACKS_PER_BUNDLE = 5;
+
+/** عدد الورق في الربطة الواحدة (5 باكوهات × 100 ورقة). */
+export const NOTES_PER_BUNDLE = NOTES_PER_PACK * PACKS_PER_BUNDLE;
+
+/** قيمة الرباط: الفئة × عدد الروابط × 100 × 5. */
+export function bundleTotal(value: number, bundles: number): number {
+  return value * bundles * NOTES_PER_PACK * PACKS_PER_BUNDLE;
+}
+
+/** قيمة الباكوهات: الفئة × عدد الباكوهات × 100. */
+export function packTotal(value: number, packs: number): number {
+  return value * packs * NOTES_PER_PACK;
+}
+
+/** قيمة الأوراق المفردة: الفئة × عدد الأوراق. */
+export function notesTotal(value: number, notes: number): number {
+  return value * notes;
+}
+
 export interface NoteRow {
   value: number;
   count: number;
