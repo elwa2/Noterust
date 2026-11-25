@@ -11,6 +11,7 @@ mod base64;
 mod commands;
 mod db_worker;
 mod paths;
+#[cfg(windows)]
 mod registry;
 mod watcher;
 
@@ -78,6 +79,7 @@ fn main() {
     init_tracing(&paths);
     tracing::info!(dir = %paths.data_dir.display(), portable = paths.portable, "starting");
 
+    #[cfg(windows)]
     if !registry::webview2_installed() {
         fatal(
             "مطلوب WebView2",

@@ -1,7 +1,8 @@
 name: Release
 
-# Builds the portable Windows exe with the MinGW/GNU toolchain described in
-# README.md and attaches the ZIP to a GitHub Release whenever a v* tag is pushed.
+# Builds the app on Windows (MinGW/GNU toolchain + NSIS installer) and Linux
+# (deb + AppImage), then attaches every artefact to a GitHub Release whenever a
+# v* tag is pushed.
 on:
   push:
     tags:
@@ -11,8 +12,8 @@ permissions:
   contents: write
 
 jobs:
-  build:
-    name: Build portable exe
+  windows:
+    name: Windows (portable + installer)
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
@@ -20,14 +21,12 @@ jobs:
       - name: Install MinGW-w64 (GNU toolchain)
         uses: msys2/setup-msys2@v2
         with:
-          msystem: UCRT64
-          install: mingw-w64-ucrt-x86_64-gcc
+          msystem: MINGW64
+          install: mingw-w64-x86_64-gcc
 
       - name: Put MinGW on PATH
         shell: pwsh
-        run: |
-          Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\ucrt64\bin"
-          gcc --version
+        run: Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
 
       - uses: dtolnay/rust-toolchain@stable
         with:
@@ -41,14 +40,19 @@ jobs:
           cache: npm
           cache-dependency-path: ui/package-lock.json
 
-      - name: Build UI
+      - name: Install UI dependencies
         working-directory: ui
-        run: |
-          npm ci
-          npm run build
+        run: npm ci
 
-      - name: Build noterust.exe
-        run: cargo build --release -p noterust --features custom-protocol
+      - name: Install Tauri CLI
+        run: npm install --global @tauri-apps/cli@^2
+
+      - name: Build exe and NSIS installer
+        shell: pwsh
+        run: |
+          gcc --version
+          rustc -vV
+          tauri build --target x86_64-pc-windows-gnu --bundles nsis
 
       - name: Package portable build
         shell: pwsh
@@ -59,16 +63,85 @@ jobs:
           Copy-Item "target/x86_64-pc-windows-gnu/release/noterust.exe" "$dir/NoteRust.exe"
           Copy-Item "packaging/README.txt" "$dir/README.txt"
           Compress-Archive -Path $dir -DestinationPath "$dir.zip" -Force
-          Add-Content -Path $env:GITHUB_ENV -Value "ZIP_FILE=$dir.zip"
 
-      - name: Publish release
-        uses: softprops/action-gh-release@v2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: windows-assets
+          path: |
+            NoteRust-*-portable-win64.zip
+            target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
+
+  linux:
+    name: Linux (deb + AppImage)
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libappindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            patchelf \
+            build-essential \
+            file \
+            wget
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: ui
+        run: npm ci
+
+      - name: Install Tauri CLI
+        run: npm install --global @tauri-apps/cli@^2
+
+      - name: Build deb and AppImage
+        run: tauri build --bundles deb,appimage
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-assets
+          path: |
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
+
+  release:
+    name: Publish release
+    needs: [windows, linux]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Show assets
+        run: ls -la dist
+
+      - uses: softprops/action-gh-release@v2
         with:
           name: NoteRust ${{ github.ref_name }}
           generate_release_notes: true
           body: |
-            نسخة Windows محمولة (64-bit)، بلا تثبيت: فك ضغط الملف وشغّل `NoteRust.exe`
-            من أي مكان. تحتاج WebView2 Runtime (مثبَّت في Windows 11 وأغلب أجهزة Windows 10).
+            **Windows** — `NoteRust_<version>_x64-setup.exe` هو المثبّت، و`NoteRust-<version>-portable-win64.zip`
+            نسخة محمولة بلا تثبيت. التطبيق يحتاج WebView2 Runtime (مثبَّت افتراضياً في
+            Windows 11 وأغلب أجهزة Windows 10).
 
-            الملف غير موقَّع رقمياً، لذا قد يظهر تحذير SmartScreen عند أول تشغيل.
-          files: ${{ env.ZIP_FILE }}
+            **Linux** — حزمة `.deb` لأوبونتو/دبيان وملف `.AppImage` يعمل على أي توزيعة بعد
+            `chmod +x` (يحتاج `libwebkit2gtk-4.1`).
+
+            الملفات غير موقَّعة رقمياً، لذا قد يظهر تحذير SmartScreen على ويندوز عند أول تشغيل.
+          files: dist/*

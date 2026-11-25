@@ -795,8 +795,11 @@ fn open_in_explorer(path: &Path) -> Result<(), String> {
     }
     #[cfg(not(windows))]
     {
-        let _ = path;
-        Err("غير مدعوم على هذا النظام".to_string())
+        std::process::Command::new("xdg-open")
+            .arg(path)
+            .spawn()
+            .map(|_| ())
+            .map_err(|err| err.to_string())
     }
 }
 
@@ -805,9 +808,15 @@ pub async fn set_default_editor(
     state: State<'_, AppState>,
     enabled: bool,
 ) -> Result<String, String> {
-    let exe = std::env::current_exe().map_err(|err| err.to_string())?;
-    let _ = &state;
-    blocking(move || crate::registry::set_default_editor(&exe, enabled)).await
+    let _ = (&state, enabled);
+    #[cfg(windows)]
+    let result = {
+        let exe = std::env::current_exe().map_err(|err| err.to_string())?;
+        blocking(move || crate::registry::set_default_editor(&exe, enabled)).await
+    };
+    #[cfg(not(windows))]
+    let result = Err("ربط أنواع الملفات مدعوم على ويندوز فقط".to_string());
+    result
 }
 
 /// Current shell-integration state, so the settings page reflects reality.
@@ -820,25 +829,42 @@ pub struct ShellState {
 
 #[tauri::command]
 pub async fn open_default_apps() -> Result<(), String> {
-    blocking(crate::registry::open_default_apps_page).await
+    #[cfg(windows)]
+    let result = blocking(crate::registry::open_default_apps_page).await;
+    #[cfg(not(windows))]
+    let result = Err("إعدادات التطبيقات الافتراضية تُدار من نظام التشغيل".to_string());
+    result
 }
 
 #[tauri::command]
 pub async fn shell_state() -> Result<ShellState, String> {
-    blocking(|| {
+    #[cfg(windows)]
+    let result = blocking(|| {
         Ok(ShellState {
             default_editor: crate::registry::default_editor_registered(),
             autostart: crate::registry::autostart_enabled(),
         })
     })
-    .await
+    .await;
+    #[cfg(not(windows))]
+    let result = Ok(ShellState {
+        default_editor: false,
+        autostart: false,
+    });
+    result
 }
 
 #[tauri::command]
 pub async fn set_autostart(state: State<'_, AppState>, enabled: bool) -> Result<(), String> {
-    let exe = std::env::current_exe().map_err(|err| err.to_string())?;
-    let _ = &state;
-    blocking(move || crate::registry::set_autostart(&exe, enabled)).await
+    let _ = (&state, enabled);
+    #[cfg(windows)]
+    let result = {
+        let exe = std::env::current_exe().map_err(|err| err.to_string())?;
+        blocking(move || crate::registry::set_autostart(&exe, enabled)).await
+    };
+    #[cfg(not(windows))]
+    let result = Err("التشغيل التلقائي مدعوم على ويندوز فقط".to_string());
+    result
 }
 
 // ---------------------------------------------------------------------------

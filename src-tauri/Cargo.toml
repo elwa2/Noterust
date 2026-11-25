@@ -25,9 +25,12 @@ chrono = "0.4"
 reqwest = { version = "0.13", default-features = false, features = ["json", "query", "rustls"] }
 directories = "6"
 rfd = "0.15"
-winreg = "0.55"
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+[target.'cfg(windows)'.dependencies]
+# Shell integration: file associations, autostart and the WebView2 check.
+winreg = "0.55"
 # Statically links Microsoft's WebView2 loader, so the portable exe needs no DLL.
 webview2-com-sys = "0.39"
 

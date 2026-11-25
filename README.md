@@ -266,15 +266,57 @@ type nul > portable.flag
 عندها تُحفظ البيانات في `NoteRust-Data` بجوار الـ exe بدل `AppData`، فتبقى كل شيء على
 ذاكرة USB مثلاً. احذف الملف للعودة إلى `AppData`.
 
-### مثبّت اختياري (NSIS)
-
-إعدادات `tauri.conf.json` تحتوي هدف `nsis`، ويمكن بناء مثبّت بـ:
+### مثبّت NSIS (للمستخدم العادي)
 
 ```bash
-cargo tauri build
+npm install --global @tauri-apps/cli@^2
+tauri build --target x86_64-pc-windows-gnu --bundles nsis
 ```
 
-لا يستخدم المشروع WiX/MSI. التوزيع الأساسي يبقى الـ exe المحمول.
+الناتج:
+
+```
+target/x86_64-pc-windows-gnu/release/bundle/nsis/NoteRust_1.0.0_x64-setup.exe
+```
+
+مثبّت لكل مستخدم (`currentUser`) بلا صلاحيات مدير، بواجهة عربية/إنجليزية، يضيف
+اختصاراً في قائمة ابدأ ومدخلاً في «إضافة أو إزالة البرامج». لا يستخدم WiX/MSI، والـ exe
+المحمول يبقى متاحاً كبديل بلا تثبيت.
+
+## 5) لينكس (deb / AppImage)
+
+الكود مشترك: الأجزاء الخاصة بويندوز (ربط أنواع الملفات، التشغيل التلقائي، فحص
+WebView2) معزولة بـ `cfg(windows)`، وعلى لينكس تُرجع رسالة «مدعوم على ويندوز فقط».
+فتح «مجلد البيانات» يستخدم `xdg-open`.
+
+### متطلبات البناء (أوبونتو/دبيان)
+
+```bash
+sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
+                 libxdo-dev libssl-dev patchelf build-essential
+```
+
+### البناء
+
+```bash
+npm --prefix ui ci && npm --prefix ui run build
+npm install --global @tauri-apps/cli@^2
+tauri build --bundles deb,appimage
+```
+
+الناتج:
+
+```
+target/release/bundle/deb/NoteRust_1.0.0_amd64.deb
+target/release/bundle/appimage/NoteRust_1.0.0_amd64.AppImage
+```
+
+تشغيل الـ AppImage: `chmod +x NoteRust_*.AppImage && ./NoteRust_*.AppImage`.
+البيانات تُحفظ في `~/.local/share/noterust/NoteRust/`، والوضع المحمول (`portable.flag`)
+يعمل بالطريقة نفسها.
+
+> البناء لِلينكس غير مختبَر على جهاز ويندوز؛ يتحقق منه workflow الإصدار
+> (`.github/workflows/release.yml`) على `ubuntu-22.04`.
 
 ## أين تُحفظ البيانات
 
