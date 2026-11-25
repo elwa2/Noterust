@@ -301,14 +301,15 @@ sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
 ```bash
 npm --prefix ui ci && npm --prefix ui run build
 npm install --global @tauri-apps/cli@^2
-tauri build --bundles deb,appimage
+# `.cargo/config.toml` يثبّت هدف ويندوز، لذا نمرر هدف لينكس صريحاً
+tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage
 ```
 
 الناتج:
 
 ```
-target/release/bundle/deb/NoteRust_1.0.1_amd64.deb
-target/release/bundle/appimage/NoteRust_1.0.1_amd64.AppImage
+target/x86_64-unknown-linux-gnu/release/bundle/deb/NoteRust_1.0.1_amd64.deb
+target/x86_64-unknown-linux-gnu/release/bundle/appimage/NoteRust_1.0.1_amd64.AppImage
 ```
 
 تشغيل الـ AppImage: `chmod +x NoteRust_*.AppImage && ./NoteRust_*.AppImage`.

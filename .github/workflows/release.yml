@@ -7,6 +7,8 @@ on:
   push:
     tags:
       - "v*"
+  # Manual runs build the app without publishing a release (used to verify CI).
+  workflow_dispatch:
 
 permissions:
   contents: write
@@ -108,19 +110,22 @@ jobs:
       - name: Install Tauri CLI
         run: npm install --global @tauri-apps/cli@^2
 
+      # .cargo/config.toml pins the Windows GNU target for local builds, so the
+      # Linux job must name its own target explicitly.
       - name: Build deb and AppImage
-        run: tauri build --bundles deb,appimage
+        run: tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage
 
       - uses: actions/upload-artifact@v4
         with:
           name: linux-assets
           path: |
-            target/release/bundle/deb/*.deb
-            target/release/bundle/appimage/*.AppImage
+            target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
+            target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
 
   release:
     name: Publish release
     needs: [windows, linux]
+    if: startsWith(github.ref, 'refs/tags/')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/download-artifact@v4
