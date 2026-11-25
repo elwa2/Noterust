@@ -34,9 +34,17 @@ jobs:
         shell: pwsh
         run: Add-Content -Path $env:GITHUB_PATH -Value "C:\msys64\mingw64\bin"
 
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: x86_64-pc-windows-gnu
+      # The resource build script (embed-resource) picks windres or the MSVC
+      # rc.exe from the *host* toolchain, not the target one. With the default
+      # MSVC host it emits a resource.lib the MinGW linker cannot read, so the
+      # whole toolchain has to be the GNU one, exactly like a local build.
+      - name: Install Rust GNU toolchain
+        shell: pwsh
+        run: |
+          rustup toolchain install stable-x86_64-pc-windows-gnu --profile minimal `
+            --target x86_64-pc-windows-gnu --no-self-update
+          rustup default stable-x86_64-pc-windows-gnu
+          rustc -vV
 
       - uses: Swatinem/rust-cache@v2
 
