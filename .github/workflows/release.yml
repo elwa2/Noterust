@@ -61,17 +61,26 @@ jobs:
       - name: Install Tauri CLI
         run: npm install --global @tauri-apps/cli@^2
 
+      # rust-toolchain.toml names the "stable" channel, which rustup resolves to
+      # its own MSVC host no matter what the default toolchain is, so the host
+      # is forced through the environment instead.
       - name: Build exe
         shell: pwsh
+        env:
+          RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
         run: |
           gcc --version
-          rustc -vV
+          $info = rustc -vV
+          $info
+          if ($info -notmatch "host: x86_64-pc-windows-gnu") { throw "rustc host is not windows-gnu" }
           tauri build --target x86_64-pc-windows-gnu --no-bundle --verbose 2>&1 |
             Tee-Object -FilePath build-windows.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
       - name: Bundle NSIS installer
         shell: pwsh
+        env:
+          RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
         run: |
           tauri bundle --target x86_64-pc-windows-gnu --bundles nsis --verbose 2>&1 |
             Tee-Object -FilePath build-windows.log -Append
