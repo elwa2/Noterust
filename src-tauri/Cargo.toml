@@ -9,7 +9,7 @@ description = "NoteRust — تطبيق ملاحظات عربي لسطح المك
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["tray-icon", "image-png"] }
+tauri = { version = "2", features = [] }
 tauri-plugin-single-instance = "2"
 # Restores window size/position/maximized state across launches.
 tauri-plugin-window-state = "2"

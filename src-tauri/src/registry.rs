@@ -8,8 +8,8 @@
 
 use std::path::Path;
 
-use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE};
-use winreg::RegKey;
+use winreg::enums::{HKEY_CURRENT_USER, KEY_READ, KEY_WRITE, REG_NONE};
+use winreg::{RegKey, RegValue};
 
 const PROG_ID: &str = "NoteRust.txt";
 const APP_NAME: &str = "NoteRust";
@@ -19,6 +19,36 @@ const EXTENSIONS: [&str; 4] = ["txt", "log", "md", "csv"];
 /// not register the app again behind their back.
 const OPT_OUT_KEY: &str = "Software\\NoteRust";
 const OPT_OUT_VALUE: &str = "OpenWithDisabled";
+/// Written by the NSIS installer after a fresh install so the app can ask once
+/// whether to open Settings → Default apps for NoteRust.
+const INSTALL_PROMPT_VALUE: &str = "ShowDefaultAppsPrompt";
+
+/// Tells Explorer that file associations changed, so the "Open with" list and
+/// the Default apps page pick up the new handler without a sign-out.
+fn notify_shell() {
+    #[link(name = "shell32")]
+    unsafe extern "system" {
+        fn SHChangeNotify(
+            event: i32,
+            flags: u32,
+            item1: *const std::ffi::c_void,
+            item2: *const std::ffi::c_void,
+        );
+    }
+    // SHCNE_ASSOCCHANGED | SHCNF_FLUSH
+    unsafe { SHChangeNotify(0x0800_0000, 0x1000, std::ptr::null(), std::ptr::null()) }
+}
+
+fn register_open_with_progid(key: &RegKey, prog_id: &str) {
+    // Windows stores OpenWithProgids entries as REG_NONE values.
+    let _ = key.set_raw_value(
+        prog_id,
+        &RegValue {
+            bytes: Vec::new(),
+            vtype: REG_NONE,
+        },
+    );
+}
 
 fn hkcu() -> std::io::Result<RegKey> {
     RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software", KEY_READ | KEY_WRITE)
@@ -76,7 +106,7 @@ fn register_open_with(exe: &Path) -> Result<(), String> {
         let (key, _) = classes
             .create_subkey(format!(".{ext}\\OpenWithProgids"))
             .map_err(|err| err.to_string())?;
-        key.set_value(PROG_ID, &"").map_err(|err| err.to_string())?;
+        register_open_with_progid(&key, PROG_ID);
         // The classic "Open with" list reads this key.
         if let Ok((list, _)) = classes.create_subkey(format!(".{ext}\\OpenWithList")) {
             let _ = list.set_value(APP_EXE, &"");
@@ -86,6 +116,9 @@ fn register_open_with(exe: &Path) -> Result<(), String> {
     // Entry shown by the Windows 11 app picker.
     if let Ok((app_key, _)) = classes.create_subkey(format!("Applications\\{APP_EXE}")) {
         let _ = app_key.set_value("FriendlyAppName", &APP_NAME);
+        if let Ok((app_icon, _)) = app_key.create_subkey("DefaultIcon") {
+            let _ = app_icon.set_value("", &format!("\"{exe}\",0"));
+        }
         if let Ok((types, _)) = app_key.create_subkey("SupportedTypes") {
             for ext in EXTENSIONS {
                 let _ = types.set_value(format!(".{ext}"), &"");
@@ -102,6 +135,7 @@ fn register_open_with(exe: &Path) -> Result<(), String> {
     {
         let _ = caps.set_value("ApplicationName", &APP_NAME);
         let _ = caps.set_value("ApplicationDescription", &"تطبيق ملاحظات عربي سريع وخفيف");
+        let _ = caps.set_value("ApplicationIcon", &format!("\"{exe}\",0"));
         if let Ok((assoc, _)) = caps.create_subkey("FileAssociations") {
             for ext in EXTENSIONS {
                 let _ = assoc.set_value(format!(".{ext}"), &PROG_ID);
@@ -128,6 +162,7 @@ fn register_open_with(exe: &Path) -> Result<(), String> {
         }
     }
 
+    notify_shell();
     Ok(())
 }
 
@@ -173,9 +208,8 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
         }
 
         Ok(
-            "تم تسجيل NoteRust لملفات txt / log / md / csv، وأُضيف إلى قائمة «فتح باستخدام». \n\
-             ليصبح الافتراضي: افتح إعدادات ويندوز ← التطبيقات ← التطبيقات الافتراضية ← NoteRust ← اختر .txt. \n\
-             وإن ظهرت نافذة «كيف تريد فتح هذا الملف؟» اختر NoteRust وعلّم «دائماً»."
+            "تم تسجيل NoteRust لملفات txt / log / md / csv، وأُضيف إلى «فتح باستخدام» و«التطبيقات الافتراضية». \n\
+             ليصبح الافتراضي اضغط زر «جعله التطبيق الافتراضي…» ثم اختر .txt ← NoteRust ← تعيين كافتراضي."
                 .to_string(),
         )
     } else {
@@ -209,6 +243,7 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
         }
         // Remember the choice so the next launch does not register it again.
         set_opt_out(true);
+        notify_shell();
         Ok("تمت إزالة تسجيل المحرر".to_string())
     }
 }
@@ -228,7 +263,7 @@ pub fn set_autostart(exe: &Path, enabled: bool) -> Result<(), String> {
         .map_err(|err| err.to_string())?;
 
     if enabled {
-        let value = format!("\"{}\" --background", exe.display());
+        let value = format!("\"{}\"", exe.display());
         key.set_value(APP_NAME, &value)
             .map_err(|err| err.to_string())
     } else {
@@ -240,13 +275,34 @@ pub fn set_autostart(exe: &Path, enabled: bool) -> Result<(), String> {
     }
 }
 
-/// Opens the Windows "Default apps" settings page so the user can confirm NoteRust.
+/// Opens Settings directly on the NoteRust page (Windows 11 21H2+); older
+/// builds fall back to the generic Default apps page.
 pub fn open_default_apps_page() -> Result<(), String> {
     std::process::Command::new("cmd")
-        .args(["/C", "start", "", "ms-settings:defaultapps"])
+        .args([
+            "/C",
+            "start",
+            "",
+            "ms-settings:defaultapps?registeredAppUser=NoteRust",
+        ])
         .spawn()
         .map(|_| ())
         .map_err(|err| err.to_string())
+}
+
+/// Reads and clears the "show the Default apps prompt" marker written by the
+/// installer after a fresh install.
+pub fn take_install_prompt() -> bool {
+    let Ok(key) =
+        RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags(OPT_OUT_KEY, KEY_READ | KEY_WRITE)
+    else {
+        return false;
+    };
+    let present = key.get_value::<u32, _>(INSTALL_PROMPT_VALUE).is_ok();
+    if present {
+        let _ = key.delete_value(INSTALL_PROMPT_VALUE);
+    }
+    present
 }
 
 /// Whether the app is currently registered in the "Open with" list for text files.

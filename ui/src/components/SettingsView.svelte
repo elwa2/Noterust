@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount } from "svelte";
+  import { getVersion } from "@tauri-apps/api/app";
   import { api } from "../lib/api";
   import * as store from "../lib/store";
   import { settings } from "../lib/store";
@@ -21,6 +22,7 @@
   let fontSize = Number($settings["font_size"] ?? "16") || 16;
   let defaultEditor = false;
   let autostart = false;
+  let appVersion = "";
 
   $: theme = $settings["theme"] ?? "dark";
   $: fontFamily = $settings["font_family"] ?? "Cairo";
@@ -31,6 +33,7 @@
 
   onMount(async () => {
     await Promise.all([loadInfo(), loadShellState()]);
+    appVersion = await getVersion().catch(() => "");
   });
 
   async function loadShellState() {
@@ -359,14 +362,15 @@
           </div>
           <div class="row wrap">
             <button class="btn" on:click={openDefaultApps}>
-              جعله التطبيق الافتراضي…
+              فتح إعدادات NoteRust الافتراضية…
             </button>
           </div>
           <p class="faint">
-            زر «جعله التطبيق الافتراضي» يفتح إعدادات ويندوز على التطبيقات الافتراضية: اختر
-            NoteRust ثم اختر <bdi dir="ltr">.txt</bdi>. ويندوز ١٠/١١ يحمي هذا الاختيار ولا
-            يسمح لأي تطبيق بتغييره بصمت — هذه الخطوة مرة واحدة فقط. وبعدها أي ملف نصي
-            بضغطة مزدوجة يفتح في NoteRust، أو من قائمة الزر الأيمن «فتح باستخدام NoteRust».
+            الزر يفتح ويندوز مباشرة على صفحة NoteRust في «التطبيقات الافتراضية»: اختر
+            <bdi dir="ltr">.txt</bdi> ثم NoteRust ثم «تعيين كافتراضي». ويندوز ١٠/١١ يحمي
+            هذا الاختيار ولا يسمح لأي تطبيق بتغييره بصمت — هذه الخطوة مرة واحدة فقط.
+            وبعدها أي ملف نصي بضغطة مزدوجة يفتح في NoteRust، أو من قائمة الزر الأيمن
+            «فتح باستخدام NoteRust».
           </p>
           <div class="row-field">
             <label for="autostart">التشغيل مع بدء ويندوز</label>
@@ -446,7 +450,10 @@
             تطبيق ملاحظات محلي لويندوز، مبني بـ Rust وTauri مع SQLite. كل بياناتك تبقى على
             جهازك.
           </p>
-          <p class="faint">الإصدار ١.٠٫٠ · يتطلب WebView2 (مضمّن في ويندوز ١٠ و١١).</p>
+          <p class="faint">
+            الإصدار {appVersion ? arabicDigits(appVersion) : "—"} · يتطلب WebView2 (مضمّن في
+            ويندوز ١٠ و١١).
+          </p>
         </div>
       </div>
     </div>

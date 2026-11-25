@@ -80,9 +80,10 @@
   التطبيق (والمؤشر يقول «محفوظ تلقائياً»)، ويُستعاد عند إعادة فتح التطبيق.
 - **آلة حاسبة**: نافذة سريعة (Ctrl+Shift+C أو من الشريط الجانبي) بمعاينة نتيجة لحظية،
   تدعم الأرقام العربية و× و÷ والأقواس، وسجل محفوظ يمكن النقر عليه لإعادة الاستخدام.
-- **تطبيق افتراضي للنصوص**: تسجيل ProgID ومحرّر لـ txt/log/md/csv + بند «فتح باستخدام
-  NoteRust» في الزر الأيمن + ظهوره في «التطبيقات الافتراضية» بويندوز؛ وفتح الملف المطلوب
-  تلقائياً عند تشغيل الـ exe بمسار ملف (فتح بنقرة مزدوجة).
+- **تطبيق افتراضي للنصوص**: المثبّت يسجّل ProgID ويربط txt/log/md/csv بـ NoteRust،
+  ويضيفه إلى «فتح باستخدام» و«التطبيقات الافتراضية» في ويندوز، مع بند «فتح باستخدام
+  NoteRust» في الزر الأيمن؛ ويفتح الملف المطلوب تلقائياً عند تشغيل الـ exe بمسار ملف
+  (فتح بنقرة مزدوجة). زر في الإعدادات يفتح صفحة NoteRust مباشرة لتأكيد الافتراضي.
 - **سلة محذوفات آمنة**: عرض للقراءة فقط مع عدّاد الأيام المتبقية، إفراغ دفعة واحدة،
   واسترجاع سريع مع زر «تراجع» في الإشعار بعد الحذف. مدة الاحتفاظ تُختار من الإعدادات
   (٧ / ١٥ / ٣٠ / ٦٠ / ٩٠ يومًا) وتُطبَّق فوراً عند تغييرها وعند كل تشغيل.
@@ -105,7 +106,7 @@
   مرسومة داخل الواجهة في شريط علوي رفيع قابل للسحب (ونقرة مزدوجة تكبّر/تُرجع)، مع خطّافات
   حافّة شفافة لتغيير حجم النافذة من كل الجهات. يظهر اسم الملاحظة المفتوحة في هذا الشريط.
 - **تجربة ويندوز**: نسخة واحدة فقط (single instance) مع تمرير الملفات للنسخة المفتوحة،
-  أيقونة في صينية النظام، إغلاق إلى الصينية، تشغيل مع بدء ويندوز، وفتح الملفات بـ
+  بلا أيقونة في صينية النظام (لا يزاحم الساعة)، تشغيل مع بدء ويندوز، وفتح الملفات بـ
   «Open with».
 
 ## المتطلبات
@@ -117,8 +118,9 @@
 | Node.js | 22 LTS | لبناء الواجهة فقط |
 | WebView2 | 157 | مثبّت في ويندوز ١٠ و١١؛ فحص تلقائي عند التشغيل |
 
-لا حاجة إلى Visual Studio أو MSVC أو Windows SDK أو WiX أو vcpkg. كل الكود (بما فيه
-SQLite المضمّن عبر `rusqlite` بخاصية `bundled`) يُترجم بـ gcc.
+لا حاجة إلى Visual Studio أو MSVC أو Windows SDK أو vcpkg. كل الكود (بما فيه
+SQLite المضمّن عبر `rusqlite` بخاصية `bundled`) يُترجم بـ gcc. بناء ملف MSI يحتاج
+أدوات WiX، وTauri ينزّلها تلقائياً عند أول بناء ولا تحتاج تثبيتها يدوياً.
 
 ## 1) تثبيت MinGW-w64
 
@@ -270,20 +272,23 @@ type nul > portable.flag
 
 ```bash
 npm install --global @tauri-apps/cli@^2
-tauri build --target x86_64-pc-windows-gnu --bundles nsis
+tauri build --target x86_64-pc-windows-gnu --bundles nsis,msi
 ```
 
 الناتج:
 
 ```
-target/x86_64-pc-windows-gnu/release/bundle/nsis/NoteRust_1.0.1_x64-setup.exe
+target/x86_64-pc-windows-gnu/release/bundle/nsis/NoteRust_1.0.7_x64-setup.exe
+target/x86_64-pc-windows-gnu/release/bundle/msi/NoteRust_1.0.7_x64_en-US.msi
 ```
 
 مثبّت لكل مستخدم (`currentUser`) بلا صلاحيات مدير، بواجهة عربية/إنجليزية، يضيف
-اختصاراً في قائمة ابدأ ومدخلاً في «إضافة أو إزالة البرامج». لا يستخدم WiX/MSI، والـ exe
+اختصاراً في قائمة ابدأ ومدخلاً في «إضافة أو إزالة البرامج»، ويسجّل ارتباطات
+txt/log/md/csv مع «فتح باستخدام» و«التطبيقات الافتراضية». بعد التثبيت يسأل التطبيق
+مرة واحدة إن كنت تريد فتح صفحة NoteRust في إعدادات ويندوز لتأكيده كافتراضي. الـ exe
 المحمول يبقى متاحاً كبديل بلا تثبيت.
 
-## 5) لينكس (deb / AppImage)
+## 5) لينكس (deb / AppImage / rpm)
 
 الكود مشترك: الأجزاء الخاصة بويندوز (ربط أنواع الملفات، التشغيل التلقائي، فحص
 WebView2) معزولة بـ `cfg(windows)`، وعلى لينكس تُرجع رسالة «مدعوم على ويندوز فقط».
@@ -293,7 +298,7 @@ WebView2) معزولة بـ `cfg(windows)`، وعلى لينكس تُرجع رس
 
 ```bash
 sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
-                 libxdo-dev libssl-dev patchelf build-essential
+                 libxdo-dev libssl-dev patchelf build-essential rpm
 ```
 
 ### البناء
@@ -302,14 +307,15 @@ sudo apt install libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev \
 npm --prefix ui ci && npm --prefix ui run build
 npm install --global @tauri-apps/cli@^2
 # `.cargo/config.toml` يثبّت هدف ويندوز، لذا نمرر هدف لينكس صريحاً
-tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage
+tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage,rpm
 ```
 
 الناتج:
 
 ```
-target/x86_64-unknown-linux-gnu/release/bundle/deb/NoteRust_1.0.1_amd64.deb
-target/x86_64-unknown-linux-gnu/release/bundle/appimage/NoteRust_1.0.1_amd64.AppImage
+target/x86_64-unknown-linux-gnu/release/bundle/deb/NoteRust_1.0.7_amd64.deb
+target/x86_64-unknown-linux-gnu/release/bundle/appimage/NoteRust_1.0.7_amd64.AppImage
+target/x86_64-unknown-linux-gnu/release/bundle/rpm/NoteRust-1.0.7-1.x86_64.rpm
 ```
 
 تشغيل الـ AppImage: `chmod +x NoteRust_*.AppImage && ./NoteRust_*.AppImage`.
@@ -460,8 +466,11 @@ IBM Plex Sans Arabic (`@fontsource/ibm-plex-sans-arabic`)، فلا يعتمد ع
 يمكن اختيار أي منهما أو Segoe UI أو Noto Naskh Arabic أو Tahoma من الإعدادات.
 
 **تعيين التطبيق كمحرر افتراضي لا ينجح**
-ويندوز يمنع التعيين البرمجي الكامل ويُظهر مربع حوار تأكيد للمستخدم؛ هذا سلوك النظام
-وليس خطأً في التطبيق.
+ويندوز ١٠/١١ يحمي `UserChoice` ويمنع أي تطبيق من تغييره بصمت. المثبّت يسجّل NoteRust
+في «فتح باستخدام» و«التطبيقات الافتراضية»، ثم افتح الإعدادات ← التطبيقات ←
+التطبيقات الافتراضية ← NoteRust (أو زر الإعدادات داخل التطبيق) واختر
+`.txt` ← NoteRust ← «تعيين كافتراضي». هذه الخطوة مرة واحدة فقط، وبعدها تعمل النقرة
+المزدوجة على ملفات النصوص في NoteRust.
 
 **البيانات لا تظهر بعد نقل الـ exe**
 في الوضع العادي البيانات في `%APPDATA%\noterust\NoteRust\data`، وليست بجوار الـ exe. إن

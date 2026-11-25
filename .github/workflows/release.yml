@@ -77,7 +77,7 @@ jobs:
             Tee-Object -FilePath build-windows.log
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-      - name: Bundle NSIS installer
+      - name: Bundle installers
         shell: pwsh
         env:
           RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
@@ -92,7 +92,7 @@ jobs:
               -Value '{"bundle":{"createUpdaterArtifacts":true}}'
             $cfg = @("--config", "updater-ci.json")
           }
-          tauri bundle --target x86_64-pc-windows-gnu --bundles nsis --verbose @cfg 2>&1 |
+          tauri bundle --target x86_64-pc-windows-gnu --bundles "nsis,msi" --verbose @cfg 2>&1 |
             Tee-Object -FilePath build-windows.log -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -135,6 +135,8 @@ jobs:
             NoteRust-*-portable-win64.zip
             target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
             target/x86_64-pc-windows-gnu/release/bundle/nsis/*.sig
+            target/x86_64-pc-windows-gnu/release/bundle/msi/*.msi
+            target/x86_64-pc-windows-gnu/release/bundle/msi/*.sig
 
   linux:
     name: Linux (deb + AppImage)
@@ -154,6 +156,7 @@ jobs:
             patchelf \
             build-essential \
             file \
+            rpm \
             wget
 
       - uses: dtolnay/rust-toolchain@stable
@@ -187,7 +190,7 @@ jobs:
             echo '{"bundle":{"createUpdaterArtifacts":true}}' > updater-ci.json
             cfg=(--config updater-ci.json)
           fi
-          tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage "${cfg[@]}" --verbose 2>&1 |
+          tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage,rpm "${cfg[@]}" --verbose 2>&1 |
             tee build-linux.log
 
       - name: Report build log
@@ -223,6 +226,7 @@ jobs:
             target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
             target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
             target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.sig
+            target/x86_64-unknown-linux-gnu/release/bundle/rpm/*.rpm
 
   release:
     name: Publish release
@@ -235,8 +239,15 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: Show assets
-        run: ls -la dist
+      # upload-artifact keeps the path relative to the workspace root, so the
+      # installer and Linux packages arrive in nested folders. Flatten them to
+      # one directory; otherwise `files: dist/*` silently publishes only the
+      # portable zip (the v1.0.6 release).
+      - name: Flatten assets
+        run: |
+          mkdir -p release-assets
+          find dist -type f -exec cp -v -t release-assets {} +
+          ls -la release-assets
 
       # The updater compares the running version against this manifest and
       # downloads the signed artifact it points at.
@@ -256,7 +267,7 @@ jobs:
                   return handle.read().strip()
 
           candidates = {}
-          for path in glob.glob("dist/*.sig"):
+          for path in glob.glob("release-assets/*.sig"):
               asset = os.path.basename(path)[:-4]
               if asset.endswith(".AppImage"):
                   key, rank = "linux-x86_64", 0
@@ -284,9 +295,9 @@ jobs:
                   for key, (_rank, asset, sig) in candidates.items()
               },
           }
-          with open("dist/latest.json", "w", encoding="utf-8") as handle:
+          with open("release-assets/latest.json", "w", encoding="utf-8") as handle:
               json.dump(manifest, handle, ensure_ascii=False, indent=2)
-          print(open("dist/latest.json", encoding="utf-8").read())
+          print(open("release-assets/latest.json", encoding="utf-8").read())
           PY
 
       - uses: softprops/action-gh-release@v2
@@ -294,12 +305,18 @@ jobs:
           name: NoteRust ${{ github.ref_name }}
           generate_release_notes: true
           body: |
-            **Windows** — `NoteRust_<version>_x64-setup.exe` هو المثبّت، و`NoteRust-<version>-portable-win64.zip`
+            **Windows** — `NoteRust_<version>_x64-setup.exe` هو المثبّت (ويوجد أيضاً
+            `NoteRust_<version>_x64_en-US.msi`)، و`NoteRust-<version>-portable-win64.zip`
             نسخة محمولة بلا تثبيت. التطبيق يحتاج WebView2 Runtime (مثبَّت افتراضياً في
             Windows 11 وأغلب أجهزة Windows 10).
 
-            **Linux** — حزمة `.deb` لأوبونتو/دبيان وملف `.AppImage` يعمل على أي توزيعة بعد
-            `chmod +x` (يحتاج `libwebkit2gtk-4.1`).
+            المثبّت يسجّل NoteRust في «فتح باستخدام» و«التطبيقات الافتراضية»، ويجعل
+            ملفات txt/log/md/csv تُفتح به. لتأكيده كافتراضي بدل Notepad: افتح
+            الإعدادات ← التطبيقات ← التطبيقات الافتراضية ← NoteRust ← اختر .txt ←
+            «تعيين كافتراضي» (ويندوز يمنع تغيير الافتراضي بصمت).
+
+            **Linux** — حزمة `.deb` لأوبونتو/دبيان، و`.rpm` لفيدورا/ريد هات، و`.AppImage`
+            يعمل على أي توزيعة بعد `chmod +x` (يحتاج `libwebkit2gtk-4.1`).
 
             الملفات غير موقَّعة رقمياً، لذا قد يظهر تحذير SmartScreen على ويندوز عند أول تشغيل.
-          files: dist/*
+          files: release-assets/*

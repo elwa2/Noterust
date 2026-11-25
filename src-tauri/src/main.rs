@@ -18,8 +18,6 @@ mod watcher;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
-use tauri::menu::{Menu, MenuItem};
-use tauri::tray::TrayIconBuilder;
 use tauri::{Emitter, Manager};
 use tracing_subscriber::EnvFilter;
 
@@ -126,16 +124,13 @@ fn main() {
             let html = ctx
                 .app_handle()
                 .try_state::<AppState>()
-                .and_then(|state| {
-                    state
-                        .html_preview
-                        .lock()
-                        .map(|code| code.clone())
-                        .ok()
-                })
+                .and_then(|state| state.html_preview.lock().map(|code| code.clone()).ok())
                 .unwrap_or_default();
             match tauri::http::Response::builder()
-                .header(tauri::http::header::CONTENT_TYPE, "text/html; charset=utf-8")
+                .header(
+                    tauri::http::header::CONTENT_TYPE,
+                    "text/html; charset=utf-8",
+                )
                 .header(tauri::http::header::CACHE_CONTROL, "no-store")
                 .body(html.into_bytes())
             {
@@ -185,18 +180,17 @@ fn main() {
             };
             app.manage(state);
 
-            // An installed copy should appear in Explorer's "Open with" list
-            // straight away; a portable run leaves the registry untouched.
+            // Make the app visible in Explorer's "Open with" picker and in
+            // Settings → Default apps. This also runs for the portable build,
+            // otherwise a portable copy can never be chosen as the .txt editor.
             #[cfg(windows)]
-            if !paths_for_state.portable {
-                match std::env::current_exe() {
-                    Ok(exe) => {
-                        if let Err(err) = crate::registry::ensure_open_with(&exe) {
-                            tracing::error!("shell registration failed: {err}");
-                        }
+            match std::env::current_exe() {
+                Ok(exe) => {
+                    if let Err(err) = crate::registry::ensure_open_with(&exe) {
+                        tracing::error!("shell registration failed: {err}");
                     }
-                    Err(err) => tracing::error!("current_exe failed: {err}"),
                 }
+                Err(err) => tracing::error!("current_exe failed: {err}"),
             }
 
             // Frameless window: the UI draws its own title bar.
@@ -214,27 +208,10 @@ fn main() {
                 }
             }
 
-            build_tray(app)?;
+            #[cfg(windows)]
+            maybe_prompt_for_default_apps();
+
             Ok(())
-        })
-        .on_window_event(|window, event| {
-            if let tauri::WindowEvent::CloseRequested { api, .. } = event {
-                let app = window.app_handle();
-                let Some(state) = app.try_state::<AppState>() else {
-                    return;
-                };
-                let minimise = state
-                    .db
-                    .call(|db| {
-                        noterust_db::settings::get(db.conn(), "close_to_tray")
-                            .map(|value| value.as_deref() == Some("true"))
-                    })
-                    .unwrap_or(false);
-                if minimise {
-                    api.prevent_close();
-                    let _ = window.hide();
-                }
-            }
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_notes,
@@ -335,38 +312,30 @@ fn main() {
     }
 }
 
-fn build_tray(app: &mut tauri::App) -> tauri::Result<()> {
-    let show = MenuItem::with_id(app, "show", "إظهار NoteRust", true, None::<&str>)?;
-    let new_note = MenuItem::with_id(app, "new-note", "ملاحظة جديدة", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "خروج", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &new_note, &quit])?;
-
-    let mut builder = TrayIconBuilder::with_id("main-tray")
-        .tooltip("NoteRust")
-        .menu(&menu)
-        .show_menu_on_left_click(false)
-        .on_menu_event(|app, event| match event.id.as_ref() {
-            "show" => {
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
-                }
-            }
-            "new-note" => {
-                let _ = app.emit("new-note", ());
-                if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
-                }
-            }
-            "quit" => app.exit(0),
-            _ => {}
-        });
-
-    if let Some(icon) = app.default_window_icon().cloned() {
-        builder = builder.icon(icon);
+/// After a fresh install the NSIS installer leaves a marker behind. Ask once
+/// whether the user wants to open the per-app Default Apps page; Windows does
+/// not allow an app to change the default handler silently.
+#[cfg(windows)]
+fn maybe_prompt_for_default_apps() {
+    if !crate::registry::take_install_prompt() {
+        return;
     }
-    builder.build(app)?;
-    Ok(())
+    std::thread::spawn(|| {
+        // Let the main window paint before the modal box appears.
+        std::thread::sleep(std::time::Duration::from_millis(1200));
+        let choice = rfd::MessageDialog::new()
+            .set_level(rfd::MessageLevel::Info)
+            .set_title("NoteRust")
+            .set_description(
+                "هل تريد تعيين NoteRust كتطبيق افتراضي لملفات النصوص (.txt) بدل Notepad؟\n\n\
+                 سيفتح ويندوز صفحة NoteRust في «التطبيقات الافتراضية». اختر .txt ثم NoteRust \
+                 واضغط «تعيين كافتراضي».\n\n\
+                 ويندوز يمنع أي تطبيق من تغيير هذا الاختيار بصمت، لذا هذه الخطوة مرة واحدة فقط.",
+            )
+            .set_buttons(rfd::MessageButtons::YesNo)
+            .show();
+        if choice == rfd::MessageDialogResult::Yes {
+            let _ = crate::registry::open_default_apps_page();
+        }
+    });
 }
