@@ -13,10 +13,131 @@ use winreg::RegKey;
 
 const PROG_ID: &str = "NoteRust.txt";
 const APP_NAME: &str = "NoteRust";
+const APP_EXE: &str = "NoteRust.exe";
 const EXTENSIONS: [&str; 4] = ["txt", "log", "md", "csv"];
+/// Set when the user switches the shell integration off, so the next start does
+/// not register the app again behind their back.
+const OPT_OUT_KEY: &str = "Software\\NoteRust";
+const OPT_OUT_VALUE: &str = "OpenWithDisabled";
 
 fn hkcu() -> std::io::Result<RegKey> {
     RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software", KEY_READ | KEY_WRITE)
+}
+
+fn open_with_opted_out() -> bool {
+    RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags(OPT_OUT_KEY, KEY_READ)
+        .and_then(|key| key.get_value::<String, _>(OPT_OUT_VALUE))
+        .is_ok()
+}
+
+fn set_opt_out(disabled: bool) {
+    let Ok((key, _)) = RegKey::predef(HKEY_CURRENT_USER).create_subkey(OPT_OUT_KEY) else {
+        return;
+    };
+    if disabled {
+        let _ = key.set_value(OPT_OUT_VALUE, &"1");
+    } else {
+        let _ = key.delete_value(OPT_OUT_VALUE);
+    }
+}
+
+/// Adds NoteRust to Explorer's "Open with" list and to Settings → Default apps
+/// for the supported extensions, without touching any existing default.
+fn register_open_with(exe: &Path) -> Result<(), String> {
+    let exe = exe
+        .to_str()
+        .ok_or_else(|| "مسار التطبيق غير صالح".to_string())?;
+    let command = format!("\"{exe}\" \"%1\"");
+
+    let classes = RegKey::predef(HKEY_CURRENT_USER)
+        .create_subkey("Software\\Classes")
+        .map_err(|err| err.to_string())?
+        .0;
+
+    let (prog, _) = classes
+        .create_subkey(PROG_ID)
+        .map_err(|err| err.to_string())?;
+    prog.set_value("", &"ملف نصي (NoteRust)")
+        .map_err(|err| err.to_string())?;
+    let (icon, _) = prog
+        .create_subkey("DefaultIcon")
+        .map_err(|err| err.to_string())?;
+    icon.set_value("", &format!("\"{exe}\",0"))
+        .map_err(|err| err.to_string())?;
+    let (shell, _) = prog
+        .create_subkey("shell\\open\\command")
+        .map_err(|err| err.to_string())?;
+    shell
+        .set_value("", &command)
+        .map_err(|err| err.to_string())?;
+
+    for ext in EXTENSIONS {
+        let (key, _) = classes
+            .create_subkey(format!(".{ext}\\OpenWithProgids"))
+            .map_err(|err| err.to_string())?;
+        key.set_value(PROG_ID, &"").map_err(|err| err.to_string())?;
+        // The classic "Open with" list reads this key.
+        if let Ok((list, _)) = classes.create_subkey(format!(".{ext}\\OpenWithList")) {
+            let _ = list.set_value(APP_EXE, &"");
+        }
+    }
+
+    // Entry shown by the Windows 11 app picker.
+    if let Ok((app_key, _)) = classes.create_subkey(format!("Applications\\{APP_EXE}")) {
+        let _ = app_key.set_value("FriendlyAppName", &APP_NAME);
+        if let Ok((types, _)) = app_key.create_subkey("SupportedTypes") {
+            for ext in EXTENSIONS {
+                let _ = types.set_value(format!(".{ext}"), &"");
+            }
+        }
+        if let Ok((app_cmd, _)) = app_key.create_subkey("shell\\open\\command") {
+            let _ = app_cmd.set_value("", &command);
+        }
+    }
+
+    // "Set defaults for applications" entry (Windows 10/11 Settings).
+    if let Ok((caps, _)) =
+        RegKey::predef(HKEY_CURRENT_USER).create_subkey("Software\\NoteRust\\Capabilities")
+    {
+        let _ = caps.set_value("ApplicationName", &APP_NAME);
+        let _ = caps.set_value("ApplicationDescription", &"تطبيق ملاحظات عربي سريع وخفيف");
+        if let Ok((assoc, _)) = caps.create_subkey("FileAssociations") {
+            for ext in EXTENSIONS {
+                let _ = assoc.set_value(format!(".{ext}"), &PROG_ID);
+            }
+        }
+    }
+    if let Ok(registered) = RegKey::predef(HKEY_CURRENT_USER)
+        .open_subkey_with_flags("Software\\RegisteredApplications", KEY_WRITE | KEY_READ)
+        .or_else(|_| {
+            RegKey::predef(HKEY_CURRENT_USER)
+                .create_subkey("Software\\RegisteredApplications")
+                .map(|(key, _)| key)
+        })
+    {
+        let _ = registered.set_value(APP_NAME, &"Software\\NoteRust\\Capabilities");
+    }
+
+    // Right-click verb in Explorer for every file type.
+    if let Ok((verb, _)) = classes.create_subkey("*\\shell\\NoteRust") {
+        let _ = verb.set_value("", &"فتح باستخدام NoteRust");
+        let _ = verb.set_value("Icon", &format!("\"{exe}\",0"));
+        if let Ok((verb_cmd, _)) = verb.create_subkey("command") {
+            let _ = verb_cmd.set_value("", &command);
+        }
+    }
+
+    Ok(())
+}
+
+/// Called on every start so an installed copy appears in Explorer's "Open with"
+/// list without the user having to open Settings first.
+pub fn ensure_open_with(exe: &Path) -> Result<(), String> {
+    if open_with_opted_out() {
+        return Ok(());
+    }
+    register_open_with(exe)
 }
 
 /// Registers (or removes) the app as an available editor for text files.
@@ -24,85 +145,14 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
     let exe = exe
         .to_str()
         .ok_or_else(|| "مسار التطبيق غير صالح".to_string())?;
-    let command = format!("\"{exe}\" \"%1\"");
 
     if enabled {
+        set_opt_out(false);
+        register_open_with(Path::new(exe))?;
+
         let classes = RegKey::predef(HKEY_CURRENT_USER)
-            .create_subkey("Software\\Classes")
-            .map_err(|err| err.to_string())?
-            .0;
-
-        let (prog, _) = classes
-            .create_subkey(PROG_ID)
+            .open_subkey_with_flags("Software\\Classes", KEY_WRITE)
             .map_err(|err| err.to_string())?;
-        prog.set_value("", &"ملف نصي (NoteRust)")
-            .map_err(|err| err.to_string())?;
-        let (icon, _) = prog
-            .create_subkey("DefaultIcon")
-            .map_err(|err| err.to_string())?;
-        icon.set_value("", &format!("\"{exe}\",0"))
-            .map_err(|err| err.to_string())?;
-        let (shell, _) = prog
-            .create_subkey("shell\\open\\command")
-            .map_err(|err| err.to_string())?;
-        shell
-            .set_value("", &command)
-            .map_err(|err| err.to_string())?;
-
-        for ext in EXTENSIONS {
-            let (key, _) = classes
-                .create_subkey(format!(".{ext}\\OpenWithProgids"))
-                .map_err(|err| err.to_string())?;
-            key.set_value(PROG_ID, &"").map_err(|err| err.to_string())?;
-        }
-
-        // Register in the "Open with" dialog list.
-        if let Ok((app_key, _)) = classes.create_subkey(format!(
-            "Applications\\{}.exe\\shell\\open\\command",
-            APP_NAME
-        )) {
-            let _ = app_key.set_value("", &command);
-        }
-        if let Ok((app_key, _)) = classes.create_subkey(format!("Applications\\{}.exe", APP_NAME)) {
-            let _ = app_key.set_value("FriendlyAppName", &APP_NAME);
-            if let Ok((types, _)) = app_key.create_subkey("SupportedTypes") {
-                for ext in EXTENSIONS {
-                    let _ = types.set_value(format!(".{ext}"), &"");
-                }
-            }
-        }
-
-        // "Set defaults for applications" entry (Windows 10/11 Settings).
-        if let Ok((caps, _)) =
-            RegKey::predef(HKEY_CURRENT_USER).create_subkey("Software\\NoteRust\\Capabilities")
-        {
-            let _ = caps.set_value("ApplicationName", &APP_NAME);
-            let _ = caps.set_value("ApplicationDescription", &"تطبيق ملاحظات عربي سريع وخفيف");
-            if let Ok((assoc, _)) = caps.create_subkey("FileAssociations") {
-                for ext in EXTENSIONS {
-                    let _ = assoc.set_value(format!(".{ext}"), &PROG_ID);
-                }
-            }
-        }
-        if let Ok(registered) = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey_with_flags("Software\\RegisteredApplications", KEY_WRITE | KEY_READ)
-            .or_else(|_| {
-                RegKey::predef(HKEY_CURRENT_USER)
-                    .create_subkey("Software\\RegisteredApplications")
-                    .map(|(key, _)| key)
-            })
-        {
-            let _ = registered.set_value(APP_NAME, &"Software\\NoteRust\\Capabilities");
-        }
-
-        // Right-click verb in Explorer for every file type.
-        if let Ok((verb, _)) = classes.create_subkey("*\\shell\\NoteRust") {
-            let _ = verb.set_value("", &"فتح باستخدام NoteRust");
-            let _ = verb.set_value("Icon", &format!("\"{exe}\",0"));
-            if let Ok((verb_cmd, _)) = verb.create_subkey("command") {
-                let _ = verb_cmd.set_value("", &command);
-            }
-        }
 
         // Best effort: when Windows never stored a user choice, point the extension
         // itself at our ProgID so a double click opens NoteRust directly.
@@ -133,7 +183,7 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
             .open_subkey_with_flags("Software\\Classes", KEY_WRITE)
             .map_err(|err| err.to_string())?;
         let _ = classes.delete_subkey_all(PROG_ID);
-        let _ = classes.delete_subkey_all(format!("Applications\\{}.exe", APP_NAME));
+        let _ = classes.delete_subkey_all(format!("Applications\\{APP_EXE}"));
         let _ = classes.delete_subkey_all("*\\shell\\NoteRust");
         if let Ok(registered) = RegKey::predef(HKEY_CURRENT_USER)
             .open_subkey_with_flags("Software\\RegisteredApplications", KEY_WRITE)
@@ -143,7 +193,7 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
         if let Ok(software) =
             RegKey::predef(HKEY_CURRENT_USER).open_subkey_with_flags("Software", KEY_WRITE)
         {
-            let _ = software.delete_subkey_all("NoteRust");
+            let _ = software.delete_subkey_all("NoteRust\\Capabilities");
         }
         for ext in EXTENSIONS {
             if let Ok(key) =
@@ -151,7 +201,14 @@ pub fn set_default_editor(exe: &Path, enabled: bool) -> Result<String, String> {
             {
                 let _ = key.delete_value(PROG_ID);
             }
+            if let Ok(key) =
+                classes.open_subkey_with_flags(format!(".{ext}\\OpenWithList"), KEY_WRITE)
+            {
+                let _ = key.delete_value(APP_EXE);
+            }
         }
+        // Remember the choice so the next launch does not register it again.
+        set_opt_out(true);
         Ok("تمت إزالة تسجيل المحرر".to_string())
     }
 }

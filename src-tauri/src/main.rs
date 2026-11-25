@@ -185,6 +185,20 @@ fn main() {
             };
             app.manage(state);
 
+            // An installed copy should appear in Explorer's "Open with" list
+            // straight away; a portable run leaves the registry untouched.
+            #[cfg(windows)]
+            if !paths_for_state.portable {
+                match std::env::current_exe() {
+                    Ok(exe) => {
+                        if let Err(err) = crate::registry::ensure_open_with(&exe) {
+                            tracing::error!("shell registration failed: {err}");
+                        }
+                    }
+                    Err(err) => tracing::error!("current_exe failed: {err}"),
+                }
+            }
+
             // Frameless window: the UI draws its own title bar.
             match app.get_webview_window("main") {
                 Some(window) => match window.set_decorations(false) {
