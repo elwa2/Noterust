@@ -7,11 +7,15 @@ on:
   push:
     tags:
       - "v*"
+    # Temporary: lets us verify the pipeline on main without burning a tag.
+    branches:
+      - main
   # Manual runs build the app without publishing a release (used to verify CI).
   workflow_dispatch:
 
 permissions:
   contents: write
+  issues: write
 
 jobs:
   windows:
@@ -49,17 +53,47 @@ jobs:
       - name: Install Tauri CLI
         run: npm install --global @tauri-apps/cli@^2
 
-      - name: Build exe and NSIS installer
+      - name: Build exe
         shell: pwsh
         run: |
           gcc --version
           rustc -vV
-          tauri build --target x86_64-pc-windows-gnu --bundles nsis
+          tauri build --target x86_64-pc-windows-gnu --no-bundle --verbose 2>&1 |
+            Tee-Object -FilePath build-windows.log
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Bundle NSIS installer
+        shell: pwsh
+        run: |
+          tauri bundle --target x86_64-pc-windows-gnu --bundles nsis --verbose 2>&1 |
+            Tee-Object -FilePath build-windows.log -Append
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Report build log
+        if: failure()
+        shell: pwsh
+        run: |
+          $log = "build-windows.log"
+          if (-not (Test-Path $log)) { Write-Output "no build log was produced"; exit 0 }
+          $tail = (Get-Content $log -Tail 400) -join "`n"
+          if ($tail.Length -gt 55000) { $tail = $tail.Substring($tail.Length - 55000) }
+          $payload = @{
+            title = "Windows CI log (${{ github.run_id }})"
+            body  = "Run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}`n`n" +
+                    "``````text`n" + $tail + "`n``````"
+          } | ConvertTo-Json
+          Invoke-RestMethod -Method Post `
+            -Uri "https://api.github.com/repos/${{ github.repository }}/issues" `
+            -Headers @{ Authorization = "Bearer $env:GITHUB_TOKEN"; Accept = "application/vnd.github+json" } `
+            -ContentType "application/json" `
+            -Body $payload
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Package portable build
         shell: pwsh
         run: |
-          $version = "${{ github.ref_name }}".TrimStart("v")
+          $version = if ("${{ github.ref_type }}" -eq "tag") { "${{ github.ref_name }}".TrimStart("v") } else { "dev" }
           $dir = "NoteRust-$version-portable-win64"
           New-Item -ItemType Directory -Path $dir | Out-Null
           Copy-Item "target/x86_64-pc-windows-gnu/release/noterust.exe" "$dir/NoteRust.exe"
@@ -113,7 +147,37 @@ jobs:
       # .cargo/config.toml pins the Windows GNU target for local builds, so the
       # Linux job must name its own target explicitly.
       - name: Build deb and AppImage
-        run: tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage
+        shell: bash
+        run: |
+          set -o pipefail
+          tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage --verbose 2>&1 |
+            tee build-linux.log
+
+      - name: Report build log
+        if: failure()
+        shell: bash
+        run: |
+          [ -f build-linux.log ] || { echo "no build log was produced"; exit 0; }
+          tail_out=$(tail -n 400 build-linux.log)
+          python3 - "$tail_out" <<'PY'
+          import json, os, sys, urllib.request
+          tail = sys.argv[1][-55000:]
+          body = f"Run: {os.environ['GITHUB_SERVER_URL']}/{os.environ['GITHUB_REPOSITORY']}/actions/runs/{os.environ['GITHUB_RUN_ID']}\n\n```text\n{tail}\n```"
+          data = json.dumps({"title": f"Linux CI log ({os.environ['GITHUB_RUN_ID']})", "body": body}).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/issues",
+              data=data,
+              headers={
+                  "Authorization": f"Bearer {os.environ['GITHUB_TOKEN']}",
+                  "Accept": "application/vnd.github+json",
+                  "Content-Type": "application/json",
+              },
+              method="POST",
+          )
+          urllib.request.urlopen(req)
+          PY
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: actions/upload-artifact@v4
         with:
