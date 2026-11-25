@@ -7,9 +7,6 @@ on:
   push:
     tags:
       - "v*"
-    # Temporary: lets us verify the pipeline on main without burning a tag.
-    branches:
-      - main
   # Manual runs build the app without publishing a release (used to verify CI).
   workflow_dispatch:
 
@@ -84,8 +81,18 @@ jobs:
         shell: pwsh
         env:
           RUSTUP_TOOLCHAIN: stable-x86_64-pc-windows-gnu
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
-          tauri bundle --target x86_64-pc-windows-gnu --bundles nsis --verbose 2>&1 |
+          # Updater artifacts are signed only when the signing key is available,
+          # so a fork without the secret can still build the app.
+          $cfg = @()
+          if ($env:TAURI_SIGNING_PRIVATE_KEY) {
+            Set-Content -Path updater-ci.json -Encoding utf8NoBOM `
+              -Value '{"bundle":{"createUpdaterArtifacts":true}}'
+            $cfg = @("--config", "updater-ci.json")
+          }
+          tauri bundle --target x86_64-pc-windows-gnu --bundles nsis --verbose @cfg 2>&1 |
             Tee-Object -FilePath build-windows.log -Append
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
@@ -127,6 +134,7 @@ jobs:
           path: |
             NoteRust-*-portable-win64.zip
             target/x86_64-pc-windows-gnu/release/bundle/nsis/*.exe
+            target/x86_64-pc-windows-gnu/release/bundle/nsis/*.sig
 
   linux:
     name: Linux (deb + AppImage)
@@ -169,9 +177,17 @@ jobs:
       # Linux job must name its own target explicitly.
       - name: Build deb and AppImage
         shell: bash
+        env:
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: |
           set -o pipefail
-          tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage --verbose 2>&1 |
+          cfg=()
+          if [ -n "$TAURI_SIGNING_PRIVATE_KEY" ]; then
+            echo '{"bundle":{"createUpdaterArtifacts":true}}' > updater-ci.json
+            cfg=(--config updater-ci.json)
+          fi
+          tauri build --target x86_64-unknown-linux-gnu --bundles deb,appimage "${cfg[@]}" --verbose 2>&1 |
             tee build-linux.log
 
       - name: Report build log
@@ -206,6 +222,7 @@ jobs:
           path: |
             target/x86_64-unknown-linux-gnu/release/bundle/deb/*.deb
             target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.AppImage
+            target/x86_64-unknown-linux-gnu/release/bundle/appimage/*.sig
 
   release:
     name: Publish release
@@ -220,6 +237,57 @@ jobs:
 
       - name: Show assets
         run: ls -la dist
+
+      # The updater compares the running version against this manifest and
+      # downloads the signed artifact it points at.
+      - name: Build updater manifest
+        env:
+          TAG: ${{ github.ref_name }}
+          REPO: ${{ github.repository }}
+        run: |
+          python3 - <<'PY'
+          import datetime, glob, json, os
+
+          tag = os.environ["TAG"]
+          base = f"https://github.com/{os.environ['REPO']}/releases/download/{tag}"
+
+          def signature(path):
+              with open(path, encoding="utf-8") as handle:
+                  return handle.read().strip()
+
+          candidates = {}
+          for path in glob.glob("dist/*.sig"):
+              asset = os.path.basename(path)[:-4]
+              if asset.endswith(".AppImage"):
+                  key, rank = "linux-x86_64", 0
+              elif asset.endswith(".nsis.zip"):
+                  key, rank = "windows-x86_64", 0
+              elif asset.endswith("-setup.exe"):
+                  key, rank = "windows-x86_64", 1
+              else:
+                  continue
+              best = candidates.get(key)
+              if best is None or rank < best[0]:
+                  candidates[key] = (rank, asset, signature(path))
+
+          if not candidates:
+              print("no signed updater artifacts; skipping latest.json")
+              raise SystemExit(0)
+
+          version = tag.lstrip("v")
+          manifest = {
+              "version": version,
+              "notes": f"NoteRust {version}",
+              "pub_date": datetime.datetime.now(datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+              "platforms": {
+                  key: {"signature": sig, "url": f"{base}/{asset}"}
+                  for key, (_rank, asset, sig) in candidates.items()
+              },
+          }
+          with open("dist/latest.json", "w", encoding="utf-8") as handle:
+              json.dump(manifest, handle, ensure_ascii=False, indent=2)
+          print(open("dist/latest.json", encoding="utf-8").read())
+          PY
 
       - uses: softprops/action-gh-release@v2
         with:

@@ -13,6 +13,10 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-single-instance = "2"
 # Restores window size/position/maximized state across launches.
 tauri-plugin-window-state = "2"
+# In-app updates: verifies signed builds published on GitHub releases.
+tauri-plugin-updater = "2"
+# Restarts the app after an update is installed.
+tauri-plugin-process = "2"
 noterust-core = { workspace = true }
 noterust-db = { workspace = true }
 noterust-fileio = { workspace = true }

@@ -31,6 +31,7 @@
   import CommandPalette from "./components/CommandPalette.svelte";
   import HelpDialog from "./components/HelpDialog.svelte";
   import CalculatorDialog from "./components/CalculatorDialog.svelte";
+  import UpdateCard from "./components/UpdateCard.svelte";
   import Icon from "./components/Icon.svelte";
 
   let paletteOpen = false;
@@ -557,6 +558,8 @@
 {#if calcOpen}
   <CalculatorDialog on:close={() => (calcOpen = false)} />
 {/if}
+
+<UpdateCard />
 
 <div class="toasts">
   {#each $toasts as item (item.id)}

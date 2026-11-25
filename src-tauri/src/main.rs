@@ -144,6 +144,9 @@ fn main() {
             }
         })
         .plugin(tauri_plugin_window_state::Builder::default().build())
+        // Signed updates from the GitHub releases feed (see tauri.conf.json).
+        .plugin(tauri_plugin_updater::Builder::new().build())
+        .plugin(tauri_plugin_process::init())
         .plugin(tauri_plugin_single_instance::init(
             move |app, argv, _cwd| {
                 // The forwarded command line starts with the executable itself;
