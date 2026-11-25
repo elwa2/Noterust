@@ -2,6 +2,7 @@
   import { createEventDispatcher, onMount } from "svelte";
   import Modal from "./Modal.svelte";
   import Icon from "./Icon.svelte";
+  import CashCounter from "./CashCounter.svelte";
   import { evaluate, formatResult } from "../lib/calc";
   import * as store from "../lib/store";
 
@@ -13,9 +14,14 @@
   const dispatch = createEventDispatcher<{ close: void }>();
   const STORAGE_KEY = "noterust.calc.history";
 
+  /** Which tool the dialog opens on. */
+  export let initialTab: "calc" | "money" = "calc";
+
   let expression = "";
   let history: HistoryEntry[] = [];
   let inputEl: HTMLInputElement | null = null;
+  /** Which tool the dialog shows: the arithmetic calculator or the cash counter. */
+  let tab: "calc" | "money" = initialTab;
 
   $: result = evaluate(expression);
   $: valid = result !== null;
@@ -78,7 +84,19 @@
   }
 </script>
 
-<Modal title="الآلة الحاسبة" on:close={() => dispatch("close")}>
+<Modal title={tab === "calc" ? "الآلة الحاسبة" : "عدّ الفلوس"} on:close={() => dispatch("close")}>
+  <div class="tabs">
+    <button class="tab" class:active={tab === "calc"} on:click={() => (tab = "calc")}>
+      <Icon name="calculator" size={14} /> حساب
+    </button>
+    <button class="tab" class:active={tab === "money"} on:click={() => (tab = "money")}>
+      <Icon name="wallet" size={14} /> عدّ الفلوس
+    </button>
+  </div>
+
+  {#if tab === "money"}
+    <CashCounter />
+  {:else}
   <div class="calc">
     <p class="faint">حساب سريع · سجل محفوظ</p>
 
@@ -99,7 +117,7 @@
         <span class="result empty">—</span>
         <span class="hint">اكتب عملية حسابية بالأرقام العربية أو اللاتينية</span>
       {:else if valid}
-        <span class="result">{formatResult(result ?? 0)}</span>
+        <span class="result" dir="ltr">{formatResult(result ?? 0)}</span>
         <span class="hint">النتيجة</span>
       {:else}
         <span class="result empty">؟</span>
@@ -135,7 +153,7 @@
           <li>
             <button class="entry" on:click={() => reuse(entry)} title="استخدام هذا التعبير">
               <span class="entry-expr" dir="ltr">{entry.expr}</span>
-              <span class="entry-value">{formatResult(entry.value)}</span>
+              <span class="entry-value" dir="ltr">{formatResult(entry.value)}</span>
             </button>
           </li>
         {/each}
@@ -146,9 +164,42 @@
       يدعم <bdi dir="ltr">+ − × ÷ ( )</bdi> والأرقام العربية، و<bdi>Enter</bdi> للحساب.
     </p>
   </div>
+  {/if}
 </Modal>
 
 <style>
+  .tabs {
+    display: flex;
+    gap: 6px;
+    margin-bottom: 12px;
+    border-bottom: 1px solid var(--border);
+    padding-bottom: 10px;
+  }
+
+  .tab {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    border-radius: var(--radius-sm);
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--text-muted);
+    font-size: 0.86em;
+  }
+
+  .tab:hover {
+    background: var(--bg-hover);
+    color: var(--text);
+  }
+
+  .tab.active {
+    background: var(--bg-elevated);
+    border-color: var(--accent);
+    color: var(--accent);
+    font-weight: 600;
+  }
+
   .calc {
     display: flex;
     flex-direction: column;

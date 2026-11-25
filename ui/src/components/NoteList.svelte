@@ -151,6 +151,14 @@
       <button class="btn primary new" on:click={() => store.createNote()} title="Ctrl+N">
         <Icon name="plus" size={15} /> ملاحظة
       </button>
+      <button
+        class="icon-btn"
+        title="إخفاء قائمة الملاحظات (Ctrl+Shift+L)"
+        aria-label="إخفاء قائمة الملاحظات"
+        on:click={() => store.toggleListHidden()}
+      >
+        <Icon name="sidebar" size={15} />
+      </button>
     </div>
 
     <div class="controls">

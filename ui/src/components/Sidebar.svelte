@@ -194,6 +194,16 @@
           <span class="label">الآلة الحاسبة</span>
         </button>
       {/if}
+      {#if visible("money")}
+        <button
+          class="item"
+          title="عدّ الفلوس — عد الملاحظات وفك المبالغ"
+          on:click={() => window.dispatchEvent(new CustomEvent("noterust:money"))}
+        >
+          <span class="icon"><Icon name="wallet" /></span>
+          <span class="label">عدّ الفلوس</span>
+        </button>
+      {/if}
     </section>
   </div>
 

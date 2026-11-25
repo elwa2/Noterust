@@ -34,6 +34,14 @@ export interface ImageOptions {
 const IMAGE_RE = /!\[([^\]]*)\]\(([^)\s]+)(?:\s+&quot;[^&]*&quot;)?\)(?:\{([^}]*)\})?/g;
 const ATTACHMENT_PREFIX = "noteimg://";
 
+/* The trash glyph used by both delete buttons, drawn in-house like the rest
+   of the app icons so it stays crisp in both themes. */
+const TRASH_ICON =
+  '<svg viewBox="0 0 20 20" width="15" height="15" fill="none" stroke="currentColor" ' +
+  'stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true" ' +
+  'focusable="false"><path d="M3.9 5.7h12.2M8 5.7V4h4v1.7M5.5 5.7l.8 10c.1.8.7 1.4 1.5 1.4h4.4' +
+  'c.8 0 1.4-.6 1.5-1.4l.8-10M8.4 8.9v5.2M11.6 8.9v5.2"/></svg>';
+
 function parseImageOptions(raw: string | undefined): ImageOptions {
   const options: ImageOptions = { width: 0, rotation: 0 };
   if (!raw) return options;
@@ -58,10 +66,12 @@ function imageMarkup(alt: string, src: string, source: string, options: ImageOpt
   const index = imageIndex;
   imageIndex += 1;
   return (
-    `<span class="md-image" data-img="${index}" data-w="${width}" data-r="${rotation}" data-src="${source}">` +
-    `<span class="md-image-frame"><img alt="${alt}" src="${src}" loading="lazy"${
-      style ? ` style="${style}"` : ""
-    } /></span>` +
+    `<span class="md-image" dir="rtl" data-img="${index}" data-w="${width}" data-r="${rotation}" data-src="${source}">` +
+    `<span class="md-image-frame">` +
+    `<img alt="${alt}" src="${src}" loading="lazy"${style ? ` style="${style}"` : ""} />` +
+    `<button type="button" class="md-image-delete" data-act="delete-image" title="حذف الصورة" ` +
+    `aria-label="حذف الصورة" contenteditable="false">${TRASH_ICON}</button>` +
+    `</span>` +
     `<span class="md-image-tools" dir="ltr">` +
     `<button type="button" data-act="zoom-out" title="تصغير">−</button>` +
     `<span class="md-image-zoom">${width > 0 ? `${width}px` : "100%"}</span>` +
@@ -69,6 +79,8 @@ function imageMarkup(alt: string, src: string, source: string, options: ImageOpt
     `<button type="button" data-act="rotate-left" title="تدوير لليسار">↺</button>` +
     `<button type="button" data-act="rotate-right" title="تدوير لليمين">↻</button>` +
     `<button type="button" data-act="reset" title="إعادة الحجم والاتجاه">إعادة</button>` +
+    `<button type="button" class="md-image-del" data-act="delete-image" title="حذف الصورة" ` +
+    `aria-label="حذف الصورة" contenteditable="false">${TRASH_ICON}</button>` +
     `</span>` +
     `</span>`
   );
@@ -141,6 +153,96 @@ export function setImageOptions(source: string, index: number, options: ImageOpt
       return `![${alt}](${src}${quote})${suffix}`;
     },
   );
+}
+
+/** Where a removed image used to sit, so it can be put back exactly. */
+export interface RemovedImage {
+  /** The Markdown text of the image, options suffix included. */
+  snippet: string;
+  /** Line the image lived on. */
+  lineIndex: number;
+  /** Character offset of the image inside that line. */
+  offset: number;
+  /** True when the image was alone on its line, so the line went with it. */
+  tookLine: boolean;
+}
+
+interface ImageHit {
+  lineIndex: number;
+  lineStart: number;
+  start: number;
+  end: number;
+  snippet: string;
+}
+
+/** Finds every image the preview renders, in the same order it renders them.
+    Images inside fenced code blocks are skipped, exactly like the renderer. */
+function findImages(source: string): ImageHit[] {
+  const hits: ImageHit[] = [];
+  const lines = source.split("\n");
+  let lineStart = 0;
+  let inFence = false;
+  for (let lineIndex = 0; lineIndex < lines.length; lineIndex += 1) {
+    const line = lines[lineIndex];
+    if (/^```(\S*)\s*$/.test(line)) {
+      inFence = !inFence;
+    } else if (!inFence) {
+      const scanner = new RegExp(IMAGE_RE.source, "g");
+      let match: RegExpExecArray | null;
+      while ((match = scanner.exec(line)) !== null) {
+        hits.push({
+          lineIndex,
+          lineStart,
+          start: lineStart + match.index,
+          end: lineStart + match.index + match[0].length,
+          snippet: match[0],
+        });
+      }
+    }
+    lineStart += line.length + 1;
+  }
+  return hits;
+}
+
+/** Removes the nth image from the note text and remembers where it was. */
+export function removeImageAt(
+  source: string,
+  index: number,
+): { text: string; removed: RemovedImage | null } {
+  const hit = findImages(source)[index];
+  if (!hit) return { text: source, removed: null };
+  const lines = source.split("\n");
+  const line = lines[hit.lineIndex] ?? "";
+  const localStart = hit.start - hit.lineStart;
+  const localEnd = hit.end - hit.lineStart;
+  const rest = line.slice(0, localStart) + line.slice(localEnd);
+  const tookLine = rest.trim() === "";
+  if (tookLine) lines.splice(hit.lineIndex, 1);
+  else lines[hit.lineIndex] = rest;
+  return {
+    text: lines.join("\n"),
+    removed: { snippet: hit.snippet, lineIndex: hit.lineIndex, offset: localStart, tookLine },
+  };
+}
+
+/** Puts a removed image back where it used to be. */
+export function restoreImageAt(source: string, removed: RemovedImage): string {
+  const lines = source.split("\n");
+  if (removed.tookLine) {
+    lines.splice(Math.min(removed.lineIndex, lines.length), 0, removed.snippet);
+  } else {
+    const index = Math.min(removed.lineIndex, Math.max(lines.length - 1, 0));
+    const line = lines[index] ?? "";
+    const at = Math.min(removed.offset, line.length);
+    lines[index] = line.slice(0, at) + removed.snippet + line.slice(at);
+  }
+  return lines.join("\n");
+}
+
+/** The attachment file a `noteimg://` reference points at, if any. */
+export function attachmentName(snippet: string): string {
+  const match = /noteimg:\/\/([^)\s]+)/.exec(snippet);
+  return match?.[1] ?? "";
 }
 
 /** Renders Markdown to safe HTML. */

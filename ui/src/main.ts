@@ -7,6 +7,11 @@ import "@fontsource/ibm-plex-sans-arabic/600.css";
 import "@fontsource/ibm-plex-sans-arabic/700.css";
 import "./app.css";
 import App from "./App.svelte";
+import { installBrowserBackend } from "./lib/browserBackend";
+
+// Outside the Tauri webview (a plain browser) the UI talks to the preview
+// backend instead of the Rust one. No-op in the real app.
+installBrowserBackend();
 
 const target = document.getElementById("app");
 if (!target) {

@@ -199,5 +199,7 @@ export const api = {
   saveAttachment: (data: string, ext: string) =>
     call<string>("save_attachment", { data, ext }),
   readAttachment: (name: string) => call<string>("read_attachment", { name }),
+  deleteAttachment: (name: string) => call<void>("delete_attachment", { name }),
+  restoreAttachment: (name: string) => call<void>("restore_attachment", { name }),
   refreshDailyBackup: () => call<void>("refresh_daily_backup"),
 };

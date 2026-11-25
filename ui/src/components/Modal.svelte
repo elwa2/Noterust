@@ -3,6 +3,7 @@
 
   export let title = "";
   export let wide = false;
+  export let narrow = false;
 
   const dispatch = createEventDispatcher<{ close: void }>();
 
@@ -21,7 +22,7 @@
   role="presentation"
   on:mousedown|self={() => dispatch("close")}
 >
-  <div class="modal" class:wide role="dialog" aria-modal="true" aria-label={title}>
+  <div class="modal" class:wide class:narrow role="dialog" aria-modal="true" aria-label={title}>
     <header>
       <span>{title}</span>
       <span class="spacer"></span>
@@ -41,6 +42,10 @@
 <style>
   .modal.wide {
     width: min(860px, 94vw);
+  }
+
+  .modal.narrow {
+    width: min(380px, 92vw);
   }
 
   .modal header span:first-child {

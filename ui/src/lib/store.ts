@@ -48,12 +48,17 @@ export interface Toast {
 export const toasts = writable<Toast[]>([]);
 let toastId = 0;
 
-export function toast(text: string, kind: "ok" | "error" = "ok", action?: ToastAction) {
+export function toast(
+  text: string,
+  kind: "ok" | "error" = "ok",
+  action?: ToastAction,
+  durationMs?: number,
+) {
   const id = ++toastId;
   toasts.update((list) => [...list, { id, text, kind, action }]);
   setTimeout(() => {
     toasts.update((list) => list.filter((item) => item.id !== id));
-  }, action ? 6500 : 3800);
+  }, durationMs ?? (action ? 6500 : 3800));
 }
 
 /** Window pinned above every other program on the desktop. */
@@ -88,6 +93,37 @@ export function dismissToast(id: number) {
 
 /** Storage key for the restored session. */
 const SESSION_KEY = "noterust.session";
+
+/** Storage key for the hidden notes list. */
+const LIST_HIDDEN_KEY = "noterust.listHidden";
+
+/**
+ * Whether the notes list column is hidden. When it is, the editor takes the
+ * whole width and a small floating button brings the list back.
+ */
+export const listHidden = writable(false);
+
+try {
+  listHidden.set(localStorage.getItem(LIST_HIDDEN_KEY) === "1");
+} catch {
+  /* keep the default */
+}
+
+listHidden.subscribe((hidden) => {
+  try {
+    localStorage.setItem(LIST_HIDDEN_KEY, hidden ? "1" : "0");
+  } catch {
+    /* storage blocked: keep the choice for this run */
+  }
+});
+
+export function setListHidden(hidden: boolean) {
+  listHidden.set(hidden);
+}
+
+export function toggleListHidden() {
+  listHidden.update((hidden) => !hidden);
+}
 
 interface Session {
   view: View;

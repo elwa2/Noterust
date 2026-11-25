@@ -1518,6 +1518,45 @@ fn load_attachment(paths: &Paths, name: &str) -> Result<String, String> {
     ))
 }
 
+/// Folder inside `assets` that parks images removed from a note, so the undo
+/// button can put the very same file back.
+fn trashed_assets_dir(paths: &Paths) -> PathBuf {
+    paths.assets_dir.join(".trash")
+}
+
+/// Moves a stored image out of the assets folder. The note drops its
+/// `noteimg://` reference at the same time, so nothing is left dangling.
+fn remove_attachment(paths: &Paths, name: &str) -> Result<(), String> {
+    let name = attachment_name(name)?;
+    let source = paths.assets_dir.join(name);
+    if !source.exists() {
+        return Ok(());
+    }
+    let trash = trashed_assets_dir(paths);
+    std::fs::create_dir_all(&trash).map_err(|err| format!("تعذر إنشاء مجلد المحذوفات: {err}"))?;
+    let target = trash.join(name);
+    if target.exists() {
+        std::fs::remove_file(&target).map_err(|err| format!("تعذر تحديث الصورة المحذوفة: {err}"))?;
+    }
+    std::fs::rename(&source, &target).map_err(|err| format!("تعذر حذف الصورة: {err}"))?;
+    Ok(())
+}
+
+/// Brings an image removed by `remove_attachment` back into the assets folder.
+fn restore_attachment_file(paths: &Paths, name: &str) -> Result<(), String> {
+    let name = attachment_name(name)?;
+    let source = trashed_assets_dir(paths).join(name);
+    if !source.exists() {
+        return Err("الصورة غير موجودة في المحذوفات".to_string());
+    }
+    let target = paths.assets_dir.join(name);
+    if target.exists() {
+        std::fs::remove_file(&target).map_err(|err| format!("تعذر تحديث الصورة: {err}"))?;
+    }
+    std::fs::rename(&source, &target).map_err(|err| format!("تعذر استرجاع الصورة: {err}"))?;
+    Ok(())
+}
+
 /// Writes a small state file (whiteboard, HTML lab) atomically: a temporary
 /// file is written first, so a crash mid-write never truncates the original.
 fn write_data_file(paths: &Paths, name: &str, data: &str, label: &str) -> Result<(), String> {
@@ -1605,6 +1644,18 @@ pub fn save_attachment(
 #[tauri::command]
 pub fn read_attachment(state: State<'_, AppState>, name: String) -> Result<String, String> {
     load_attachment(&state.paths, &name)
+}
+
+/// Removes the file behind a `noteimg://` reference the user deleted.
+#[tauri::command]
+pub fn delete_attachment(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    remove_attachment(&state.paths, &name)
+}
+
+/// Puts back an image removed by `delete_attachment`.
+#[tauri::command]
+pub fn restore_attachment(state: State<'_, AppState>, name: String) -> Result<(), String> {
+    restore_attachment_file(&state.paths, &name)
 }
 
 #[tauri::command]

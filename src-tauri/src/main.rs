@@ -297,6 +297,8 @@ fn main() {
             commands::set_html_preview,
             commands::save_attachment,
             commands::read_attachment,
+            commands::delete_attachment,
+            commands::restore_attachment,
             commands::refresh_daily_backup,
             ai::ai_connections,
             ai::ai_save_connection,

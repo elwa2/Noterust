@@ -3,6 +3,7 @@
   import { toast } from "../lib/store";
   import { api } from "../lib/api";
   import { arabicDigits } from "../lib/format";
+  import { previewFrameUrl } from "../lib/preview";
   import Icon from "./Icon.svelte";
   import BackButton from "./BackButton.svelte";
 
@@ -118,7 +119,7 @@
     try {
       await api.setHtmlPreview(code);
       preview = code;
-      previewUrl = `${previewOrigin}/?v=${Date.now()}`;
+      previewUrl = previewFrameUrl(code, previewOrigin);
     } catch (error) {
       toast(error instanceof Error ? error.message : String(error), "error");
     }

@@ -105,9 +105,9 @@ export function evaluate(input: string): number | null {
   return Math.abs(value) < 1e15 ? value : null;
 }
 
-const resultFormatter = new Intl.NumberFormat("ar-EG", { maximumFractionDigits: 8 });
+const resultFormatter = new Intl.NumberFormat("en-US", { maximumFractionDigits: 8 });
 
-/** `٩٠` or `١٥٫٥` — rounded to 8 decimals with Arabic-Indic digits. */
+/** `1545` or `1,545` — rounded to 8 decimals with Latin digits. */
 export function formatResult(value: number): string {
   const rounded = Math.round(value * 1e8) / 1e8;
   return resultFormatter.format(rounded);

@@ -16,6 +16,7 @@ export const SIDEBAR_ITEMS: SidebarItem[] = [
   { id: "ai", name: "الذكاء الاصطناعي" },
   { id: "html", name: "معمل HTML" },
   { id: "calculator", name: "الآلة الحاسبة" },
+  { id: "money", name: "عدّ الفلوس" },
 ];
 
 export interface SidebarPrefs {

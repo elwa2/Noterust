@@ -15,8 +15,16 @@
     compact,
   } from "../lib/store";
   import { arabicDateTime, NOUNS, plural } from "../lib/format";
-  import { renderMarkdown, setImageOptions } from "../lib/markdown";
+  import {
+    renderMarkdown,
+    setImageOptions,
+    removeImageAt,
+    restoreImageAt,
+    attachmentName,
+  } from "../lib/markdown";
+  import type { RemovedImage } from "../lib/markdown";
   import { htmlToMarkdown } from "../lib/htmlToMarkdown";
+  import { previewFrameUrl } from "../lib/preview";
   import { editorCommand } from "../lib/bus";
   import type { EditorCommand } from "../lib/bus";
   import type { Note } from "../lib/types";
@@ -71,6 +79,19 @@
   let imageAssets: Record<string, string> = {};
   const loadingImages = new Set<string>();
   let readerEl: HTMLElement | null = null;
+  /** Image the user picked in the preview; the Delete key removes it. */
+  let selectedImage: number | null = null;
+  /** Image waiting for the delete confirmation. */
+  let pendingDelete: number | null = null;
+  /** HTML files open in the rendered preview; the code stays one click away. */
+  let htmlPreview = false;
+  let htmlPreviewUrl = "";
+  let htmlTimer: ReturnType<typeof setTimeout> | undefined;
+  // The preview frame lives on its own origin so the app CSP cannot block
+  // the page's scripts, fonts and images.
+  const previewOrigin = navigator.userAgent.includes("Windows")
+    ? "http://htmlpreview.localhost"
+    : "htmlpreview://localhost";
 
   let lockMode: "lock" | "remove" | null = null;
   let versionsOpen = false;
@@ -110,6 +131,9 @@
     void previewHtml;
     void refreshReader();
   }
+  // An HTML note renders itself; the preview follows every edit.
+  $: htmlCapable = isHtmlNote(note, content);
+  $: if (htmlPreview && content) scheduleHtmlPreview(content);
 
   $: if (note) {
     const key = `${note.id}:${passwords[note.id] ?? ""}`;
@@ -176,6 +200,14 @@
     content = current.content;
     saveStatus.set("saved");
     dirty = false;
+    // An HTML file opens rendered; the source stays one click away.
+    htmlPreview = isHtmlNote(current, content);
+    if (htmlPreview) {
+      preview = false;
+      void refreshHtmlPreview(content);
+    } else {
+      htmlPreviewUrl = "";
+    }
   }
 
   function withoutKey(map: Record<number, string>, id: number) {
@@ -803,8 +835,14 @@
 
   /** Zoom/rotate buttons and the code-block copy button live in the preview. */
   function onReaderClick(event: MouseEvent) {
-    const button = (event.target as HTMLElement).closest<HTMLElement>("button[data-act]");
-    if (!button) return;
+    const target = event.target as HTMLElement;
+    const button = target.closest<HTMLElement>("button[data-act]");
+    if (!button) {
+      // Clicking an image selects it; clicking anywhere else drops the selection.
+      const image = target.closest<HTMLElement>("img");
+      selectImage(image ? imageIndex(image.closest<HTMLElement>(".md-image")) : null);
+      return;
+    }
     if (button.dataset.act === "copy-code") {
       event.preventDefault();
       const code = button.parentElement?.querySelector("code")?.textContent ?? "";
@@ -814,8 +852,13 @@
     const figure = button.closest<HTMLElement>(".md-image");
     if (!figure) return;
     event.preventDefault();
-    const index = Number(figure.dataset.img ?? "-1");
+    const index = imageIndex(figure);
     if (index < 0) return;
+    if (button.dataset.act === "delete-image") {
+      event.stopPropagation();
+      askDeleteImage(index);
+      return;
+    }
     const image = figure.querySelector("img");
     const width = Number(figure.dataset.w ?? "0") || Math.round(image?.clientWidth ?? 0);
     const rotation = Number(figure.dataset.r ?? "0");
@@ -843,12 +886,129 @@
     }
     content = setImageOptions(content, index, { width: nextWidth, rotation: nextRotation });
     markDirty();
+    refreshPreview();
+  }
+
+  /** Index of the image a preview element belongs to, or -1. */
+  function imageIndex(figure: HTMLElement | null): number {
+    const index = Number(figure?.dataset.img ?? "-1");
+    return index >= 0 ? index : -1;
+  }
+
+  /** Highlights one image so the Delete key knows which one to remove. */
+  function selectImage(index: number | null) {
+    selectedImage = index === null || index < 0 ? null : index;
+    if (!readerEl) return;
+    for (const figure of readerEl.querySelectorAll<HTMLElement>(".md-image")) {
+      figure.classList.toggle("is-selected", imageIndex(figure) === selectedImage);
+    }
+  }
+
+  /** Delete removes the selected image, after the same confirmation. */
+  function onReaderKeydown(event: KeyboardEvent) {
+    if (event.key !== "Delete" || selectedImage === null) return;
+    if (pendingDelete !== null) return;
+    event.preventDefault();
+    event.stopPropagation();
+    askDeleteImage(selectedImage);
+  }
+
+  /** Asks before removing an image, so a stray click never loses one. */
+  function askDeleteImage(index: number) {
+    if (trashed || lockedView) return;
+    pendingDelete = index;
+  }
+
+  /** Removes the image from the note text and its file, then offers an undo. */
+  async function confirmDeleteImage() {
+    const index = pendingDelete;
+    pendingDelete = null;
+    if (index === null || index < 0) return;
+    const result = removeImageAt(content, index);
+    const removed = result.removed;
+    if (!removed) return;
+    content = result.text;
+    selectImage(null);
+    markDirty();
+    refreshPreview();
+    const attachment = attachmentName(removed.snippet);
+    // The file goes only when nothing else in the note points at it.
+    const stillUsed = attachment !== "" && content.includes(`noteimg://${attachment}`);
+    if (attachment && !stillUsed) {
+      try {
+        await api.deleteAttachment(attachment);
+      } catch (error) {
+        store.toast(store.errorMessage(error), "error");
+      }
+    }
+    store.toast(
+      "تم حذف الصورة",
+      "ok",
+      {
+        label: "تراجع",
+        run: () => {
+          void undoDeleteImage(removed, attachment && !stillUsed ? attachment : "");
+        },
+      },
+      5000,
+    );
+  }
+
+  /** Puts a deleted image back, in the very same spot. */
+  async function undoDeleteImage(removed: RemovedImage, attachment: string) {
+    if (attachment) {
+      try {
+        await api.restoreAttachment(attachment);
+      } catch {
+        /* the file is already gone; the note text is restored anyway */
+      }
+    }
+    content = restoreImageAt(content, removed);
+    markDirty();
+    refreshPreview();
+    store.toast("تم استرجاع الصورة");
+  }
+
+  /** Repaints the preview after the note text changed outside the caret. */
+  function refreshPreview() {
     readerEditing = false;
+    // The picture nodes are rebuilt, so any earlier pick is gone with them.
+    selectedImage = null;
     previewHtml = renderMarkdown(content, imageAssets);
     void tick().then(() => {
       layoutImages();
       void refreshReader();
     });
+  }
+
+  /** True for HTML documents: they can be rendered instead of read as code. */
+  function isHtmlNote(current: Note | null, text: string): boolean {
+    const path = current?.sourcePath ?? "";
+    if (/\.html?$/i.test(path)) return true;
+    return /^\s*(<!doctype\s+html|<html[\s>])/i.test(text);
+  }
+
+  /** Sends the note text to the preview frame and reloads it. */
+  async function refreshHtmlPreview(text: string) {
+    try {
+      await api.setHtmlPreview(text);
+      htmlPreviewUrl = previewFrameUrl(text, previewOrigin);
+    } catch (error) {
+      store.toast(store.errorMessage(error), "error");
+    }
+  }
+
+  /** Re-renders the HTML preview shortly after the last edit. */
+  function scheduleHtmlPreview(text: string) {
+    clearTimeout(htmlTimer);
+    htmlTimer = setTimeout(() => void refreshHtmlPreview(text), 600);
+  }
+
+  /** Switches between the rendered page and the HTML source. */
+  function toggleHtmlPreview() {
+    htmlPreview = !htmlPreview;
+    if (htmlPreview) void refreshHtmlPreview(content);
+    else htmlPreviewUrl = "";
   }
 
   /** Rotated images are painted turned, so their box height follows the width. */
@@ -936,7 +1096,12 @@
     if (!command) return;
     handleCommand(command.name);
   });
-  onDestroy(unsubscribe);
+  onDestroy(() => {
+    unsubscribe();
+    clearTimeout(htmlTimer);
+    clearTimeout(saveTimer);
+    clearTimeout(listTimer);
+  });
 
   function handleCommand(name: EditorCommand) {
     switch (name) {
@@ -993,6 +1158,8 @@
     preview = !preview;
     closePopovers();
     readerEditing = false;
+    // The rendered page and the Markdown preview cannot share the same pane.
+    if (preview) htmlPreview = false;
     if (preview) {
       previewHtml = renderMarkdown(content, imageAssets);
       void tick().then(refreshReader);
@@ -1108,13 +1275,24 @@
           </div>
         {/if}
       </div>
-      <button
-        class="icon-btn"
-        class:active={preview}
-        title={preview ? "تحرير النص (Ctrl+E)" : "معاينة Markdown منسّقة (Ctrl+E)"}
-        on:click={togglePreview}
-        >{preview ? "✎" : "👁"}</button
-      >
+      {#if htmlCapable}
+        <button
+          class="icon-btn"
+          class:active={htmlPreview}
+          title={htmlPreview ? "عرض كود HTML" : "معاينة HTML"}
+          on:click={toggleHtmlPreview}
+          ><Icon name={htmlPreview ? "code" : "html"} /></button
+        >
+      {/if}
+      {#if !htmlPreview}
+        <button
+          class="icon-btn"
+          class:active={preview}
+          title={preview ? "تحرير النص (Ctrl+E)" : "معاينة Markdown منسّقة (Ctrl+E)"}
+          on:click={togglePreview}
+          >{preview ? "✎" : "👁"}</button
+        >
+      {/if}
       <button
         class="icon-btn"
         class:active={$alwaysOnTop}
@@ -1240,7 +1418,21 @@
       {/if}
 
       <div class="body">
-        {#if preview}
+        {#if htmlPreview}
+          <div class="html-preview">
+            <iframe
+              title="معاينة HTML"
+              sandbox="allow-scripts allow-same-origin allow-modals allow-forms allow-popups allow-downloads"
+              src={htmlPreviewUrl}
+            ></iframe>
+            <div class="html-preview-foot">
+              <span class="muted">الصفحة تعمل في إطار معزول — أي تعديل على الكود يُحفظ في الملف الأصلي.</span>
+              <span class="spacer"></span>
+              <button class="btn small ghost" on:click={() => void refreshHtmlPreview(content)}>تحديث المعاينة</button>
+              <button class="btn small" on:click={toggleHtmlPreview}>عرض الكود</button>
+            </div>
+          </div>
+        {:else if preview}
           <div
             class="reader scroll"
             class:editing={readerEditing}
@@ -1253,6 +1445,7 @@
             contenteditable={!trashed && !lockedView}
             spellcheck="false"
             on:click={onReaderClick}
+            on:keydown={onReaderKeydown}
             on:input={onReaderInput}
             on:paste={onReaderPaste}
             on:focus={() => (readerEditing = true)}
@@ -1325,6 +1518,17 @@
     <svelte:fragment slot="footer">
       <button class="btn primary" on:click={goToLine}>انتقال</button>
       <button class="btn ghost" on:click={() => (gotoOpen = false)}>إلغاء</button>
+    </svelte:fragment>
+  </Modal>
+{/if}
+
+{#if pendingDelete !== null}
+  <Modal narrow title="حذف الصورة" on:close={() => (pendingDelete = null)}>
+    <p class="confirm-text">هل تريد حذف هذه الصورة؟</p>
+    <p class="confirm-hint">يمكن التراجع عن الحذف من الإشعار الذي يظهر أسفل الشاشة.</p>
+    <svelte:fragment slot="footer">
+      <button class="btn danger-solid" on:click={confirmDeleteImage}>حذف</button>
+      <button class="btn ghost" on:click={() => (pendingDelete = null)}>إلغاء</button>
     </svelte:fragment>
   </Modal>
 {/if}
@@ -1657,6 +1861,38 @@
     min-height: 0;
   }
 
+  /* Rendered HTML file: the page runs in an isolated frame, the source
+     stays in the editor next to it. */
+  .html-preview {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    background: var(--bg);
+  }
+
+  .html-preview iframe {
+    flex: 1;
+    min-height: 0;
+    width: 100%;
+    border: 0;
+    background: #ffffff;
+  }
+
+  .html-preview-foot {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 7px 14px;
+    border-top: 1px solid var(--border);
+    background: var(--bg-elevated);
+    font-size: 0.78em;
+  }
+
+  .html-preview-foot .spacer {
+    flex: 1;
+  }
+
   /* Rendered Markdown preview */
   .reader {
     flex: 1;
@@ -1720,6 +1956,7 @@
     align-items: center;
     justify-content: center;
     max-width: 100%;
+    position: relative;
   }
 
   /* An explicit zoom width may exceed the pane; the reader scrolls sideways. */
@@ -1776,6 +2013,89 @@
     min-width: 46px;
     text-align: center;
     font-variant-numeric: tabular-nums;
+  }
+
+  /* Delete button over the image: a small dark disc that turns red on hover.
+     Its size is fixed, so zooming the image never scales the button. */
+  .reader :global(.md-image-delete) {
+    position: absolute;
+    top: 8px;
+    inset-inline-start: 8px;
+    width: 28px;
+    height: 28px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+    border: 1px solid rgba(255, 255, 255, 0.28);
+    border-radius: 50%;
+    background: rgba(18, 18, 18, 0.62);
+    color: #ffffff;
+    cursor: pointer;
+    opacity: 0;
+    transform: scale(0.88);
+    transition: opacity 0.15s ease, transform 0.15s ease, background 0.15s ease,
+      border-color 0.15s ease;
+  }
+
+  .reader :global(.md-image:hover .md-image-delete),
+  .reader :global(.md-image-delete:focus-visible) {
+    opacity: 1;
+    transform: scale(1);
+  }
+
+  .reader :global(.md-image-delete:hover) {
+    background: var(--danger);
+    border-color: var(--danger);
+  }
+
+  /* Touch screens have no hover, so the button stays visible there. */
+  @media (hover: none) {
+    .reader :global(.md-image-delete) {
+      opacity: 1;
+      transform: scale(1);
+    }
+  }
+
+  /* The same trash button inside the toolbar under the image. */
+  .reader :global(.md-image-tools .md-image-del) {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted, var(--text-faint));
+  }
+
+  .reader :global(.md-image-tools .md-image-del:hover) {
+    background: var(--danger);
+    color: #ffffff;
+  }
+
+  /* The image picked with the mouse, so the Delete key has a target. */
+  .reader :global(.md-image.is-selected img) {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+  }
+
+  .confirm-text {
+    margin: 0 0 6px;
+    font-size: 1.02em;
+  }
+
+  .confirm-hint {
+    margin: 0;
+    color: var(--text-muted);
+    font-size: 0.85em;
+  }
+
+  :global(.btn.danger-solid) {
+    background: var(--danger);
+    border-color: var(--danger);
+    color: #ffffff;
+    font-weight: 600;
+  }
+
+  :global(.btn.danger-solid:hover) {
+    filter: brightness(1.08);
   }
 
   .reader :global(a) {

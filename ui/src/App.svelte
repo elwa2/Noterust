@@ -14,10 +14,12 @@
     toasts,
     compact,
     alwaysOnTop,
+    listHidden,
   } from "./lib/store";
   import { sendEditorCommand } from "./lib/bus";
   import { sidebarPrefs, setSidebarCollapsed } from "./lib/sidebarPrefs";
   import { getCurrentWindow } from "@tauri-apps/api/window";
+  import { getCurrentWebview } from "@tauri-apps/api/webview";
   import Sidebar from "./components/Sidebar.svelte";
   import NoteList from "./components/NoteList.svelte";
   import Editor from "./components/Editor.svelte";
@@ -37,7 +39,12 @@
   let paletteOpen = false;
   let helpOpen = false;
   let calcOpen = false;
+  /** Which tab the calculator opens on. */
+  let calcTab: "calc" | "money" = "calc";
   let themeMedia: MediaQueryList | null = null;
+
+  // Drag-and-drop file support.
+  let dragOver = false;
 
   let sidebarWidth = 246;
   let listWidth = 322;
@@ -156,21 +163,68 @@
       listen("new-note", () => void store.createNote()),
     ];
 
+    // Tauri v2 native drag-and-drop: receives real file paths from the OS.
+    // This is the primary mechanism; HTML5 drag events below are a fallback
+    // for environments where the Tauri handler is not available.
+    let dropUnlisten: (() => void) | null = null;
+    getCurrentWebview()
+      .onDragDropEvent((event) => {
+        if (event.payload.type === "drop" && event.payload.paths.length > 0) {
+          // The window may sit behind others while a file is dragged over it.
+          void appWindow.unminimize().catch(() => undefined);
+          void appWindow.setFocus().catch(() => undefined);
+          void handleDroppedFiles(event.payload.paths);
+        } else if (event.payload.type === "enter" || event.payload.type === "over") {
+          dragOver = true;
+        } else if (event.payload.type === "leave") {
+          dragOver = false;
+        }
+      })
+      .then((fn) => (dropUnlisten = fn))
+      .catch(() => {
+        // Fallback to HTML5 drag-and-drop if the Tauri handler is not
+        // supported (e.g. during development with a non-Tauri webview).
+        dropUnlisten = null;
+      });
+
+    // Keep the HTML5 fallback listeners for development environments.
+    // These are harmless when the Tauri handler is active because the
+    // dataTransfer will not contain file paths on Windows for external drops.
+    const onHtmlDragOver = (event: DragEvent) => handleDragOver(event);
+    const onHtmlDragEnter = (event: DragEvent) => handleDragEnter(event);
+    const onHtmlDragLeave = (event: DragEvent) => handleDragLeave(event);
+    const onHtmlDrop = (event: DragEvent) => handleDrop(event);
+    document.addEventListener("dragover", onHtmlDragOver);
+    document.addEventListener("dragenter", onHtmlDragEnter);
+    document.addEventListener("dragleave", onHtmlDragLeave);
+    document.addEventListener("drop", onHtmlDrop);
+
     const onKeydown = (event: KeyboardEvent) => handleShortcut(event);
     window.addEventListener("keydown", onKeydown);
 
     const openCalc = () => (calcOpen = true);
     window.addEventListener("noterust:calc", openCalc);
+    const openMoney = () => {
+      calcTab = "money";
+      calcOpen = true;
+    };
+    window.addEventListener("noterust:money", openMoney);
     window.addEventListener("contextmenu", onContextMenu);
 
     return () => {
       window.removeEventListener("keydown", onKeydown);
       window.removeEventListener("noterust:calc", openCalc);
+      window.removeEventListener("noterust:money", openMoney);
       window.removeEventListener("contextmenu", onContextMenu);
       themeMedia?.removeEventListener("change", applyTheme);
       for (const pending of unlisteners) {
         void pending.then((unlisten) => unlisten());
       }
+      dropUnlisten?.();
+      document.removeEventListener("dragover", onHtmlDragOver);
+      document.removeEventListener("dragenter", onHtmlDragEnter);
+      document.removeEventListener("dragleave", onHtmlDragLeave);
+      document.removeEventListener("drop", onHtmlDrop);
     };
   });
 
@@ -218,19 +272,12 @@
   async function openPendingFiles() {
     try {
       const files = await api.openStartupFiles();
+      let opened = 0;
       for (const file of files) {
         // One unreadable file must not stop the rest of the batch.
-        try {
-          const opened = await api.openPath(file);
-          await store.openNote(opened.noteId);
-          if (opened.truncated) {
-            store.toast("الملف كبير جداً — حُمّل جزء منه فقط وقد يُمنع الحفظ.", "error");
-          }
-        } catch (error) {
-          store.toast(store.errorMessage(error), "error");
-        }
+        if (await openExternalFile(file)) opened += 1;
       }
-      if (files.length > 0) await store.refreshAll();
+      if (opened > 0) await store.refreshAll();
     } catch (error) {
       store.toast(store.errorMessage(error), "error");
     }
@@ -296,6 +343,11 @@
     if (ctrl && event.shiftKey && key === "n") {
       event.preventDefault();
       window.dispatchEvent(new CustomEvent("noterust:new-folder"));
+      return;
+    }
+    if (ctrl && event.shiftKey && key === "l") {
+      event.preventDefault();
+      if (notesMode) store.toggleListHidden();
       return;
     }
     if (ctrl && event.shiftKey && key === "c") {
@@ -424,9 +476,135 @@
       store.toast(store.errorMessage(error), "error");
     }
   }
+
+  // ---- Drag-and-drop file handling ----
+
+  /** Windows paths compare case-insensitively and may use either slash. */
+  function samePath(left: string, right: string): boolean {
+    const norm = (value: string) =>
+      value.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
+    return norm(left) === norm(right);
+  }
+
+  function fileName(path: string): string {
+    return path.split(/[\\/]/).pop() || path;
+  }
+
+  /**
+   * Opens a file from disk in a tab bound to its path. This is the one way
+   * files enter the app, so "Open with NoteRust", the file dialog and a
+   * drag-and-drop all behave exactly the same.
+   */
+  async function openExternalFile(path: string): Promise<boolean> {
+    try {
+      const opened = await api.openPath(path);
+      // The same file must never open twice: focus the tab that holds it.
+      const existing = $tabs.find(
+        (item) => item.sourcePath && samePath(item.sourcePath, opened.path),
+      );
+      if (existing) {
+        store.activeTab.set(existing.id);
+        store.updateWindowTitle(existing);
+        // Pick up any change that happened on disk since the tab opened.
+        try {
+          await api.reloadExternalFile(existing.id);
+          const note = await api.getNote(existing.id);
+          store.updateTab(note);
+        } catch {
+          /* the file may have been moved; the tab stays as it is */
+        }
+      } else {
+        await store.openNote(opened.noteId);
+      }
+      if (opened.truncated) {
+        store.toast("الملف كبير جداً — حُمّل جزء منه فقط وقد يُمنع الحفظ.", "error");
+      }
+      return true;
+    } catch (error) {
+      const message = store.errorMessage(error);
+      if (message.includes("ليس ملفاً نصياً")) {
+        store.toast(`نوع الملف غير مدعوم: ${fileName(path)}`, "error");
+      } else {
+        store.toast(`تعذر فتح ${fileName(path)} — ${message}`, "error");
+      }
+      return false;
+    }
+  }
+
+  // HTML5 drag-and-drop fallback handlers (used only when the Tauri
+  // onDragDropEvent handler is not available, e.g. in a browser dev server).
+  // On Windows with WebView2, file paths are not exposed through the
+  // DataTransfer API for external drops, so this is purely for visual feedback
+  // in that case.
+  function handleDragOver(event: DragEvent) {
+    if (!event.dataTransfer) return;
+    if (event.dataTransfer.types.includes("text/noterust-note")) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "copy";
+    dragOver = true;
+  }
+
+  function handleDragEnter(event: DragEvent) {
+    if (!event.dataTransfer) return;
+    if (event.dataTransfer.types.includes("text/noterust-note")) return;
+    event.preventDefault();
+    dragOver = true;
+  }
+
+  function handleDragLeave(event: DragEvent) {
+    if (event.relatedTarget === null || event.relatedTarget === document.body) {
+      dragOver = false;
+    }
+  }
+
+  function handleDrop(event: DragEvent) {
+    dragOver = false;
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+
+    // Internal note/tabs drag should keep their own handling.
+    if (event.dataTransfer.types.includes("text/noterust-note")) return;
+
+    // On Windows with WebView2, file paths are not exposed through the
+    // DataTransfer API for external drops. The Tauri onDragDropEvent
+    // handler (registered above) will process these files. If we reach
+    // here without the Tauri handler, just show a message.
+    const items = event.dataTransfer.items;
+    if (items) {
+      for (const item of Array.from(items)) {
+        if (item.kind === "file") {
+          // File detected but path not available via HTML5 API on Windows.
+          // The Tauri handler will have already processed it.
+          return;
+        }
+      }
+    }
+  }
+
+  /** Opens every dropped file, one tab each, exactly like "Open with". */
+  async function handleDroppedFiles(paths: string[]) {
+    if (paths.length === 0) return;
+    let opened = 0;
+    for (const path of paths) {
+      if (await openExternalFile(path)) opened += 1;
+    }
+    if (opened > 0) {
+      await store.refreshAll();
+    }
+  }
 </script>
 
-<div class="shell">
+<div
+  class="shell"
+  class:drag-over={dragOver}
+  on:dragover|preventDefault={handleDragOver}
+  on:dragenter={handleDragEnter}
+  on:dragleave={handleDragLeave}
+  on:drop={handleDrop}
+>
+  <div class="drop-plate" aria-hidden="true">
+    <span><Icon name="importIcon" size={18} /> أفلت الملف هنا للفتح</span>
+  </div>
   {#if !$compact}
     <header
       class="titlebar"
@@ -459,6 +637,7 @@
   class:notes-mode={notesMode}
   class:compact={$compact}
   class:sidebar-collapsed={$sidebarPrefs.collapsed}
+  class:list-hidden={$listHidden}
   style="--sidebar-w:{$sidebarPrefs.collapsed ? 64 : sidebarWidth}px; --list-w:{listWidth}px; --font-size:{fontSize}px; --font-family:{fontStack}"
 >
   {#if !$compact}
@@ -492,16 +671,29 @@
       <Editor />
     </div>
   {:else if notesMode}
-    <NoteList />
-    <div
-      class="resizer"
-      role="separator"
-      aria-orientation="vertical"
-      aria-label="تغيير عرض قائمة الملاحظات"
-      class:dragging={resizing === "list"}
-      on:pointerdown={(event) => startResize("list", event)}
-    ></div>
+    {#if !$listHidden}
+      <NoteList />
+      <div
+        class="resizer"
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="تغيير عرض قائمة الملاحظات"
+        class:dragging={resizing === "list"}
+        on:pointerdown={(event) => startResize("list", event)}
+      ></div>
+    {/if}
     <Editor />
+    {#if $listHidden}
+      <!-- The hidden list takes no space: this button floats over the editor. -->
+      <button
+        class="list-restore"
+        title="إظهار قائمة الملاحظات (Ctrl+Shift+L)"
+        aria-label="إظهار قائمة الملاحظات"
+        on:click={() => store.setListHidden(false)}
+      >
+        <Icon name="sidebar" size={16} />
+      </button>
+    {/if}
   {:else if $view === "tasks"}
     <TasksView />
   {:else if $view === "finance"}
@@ -556,7 +748,7 @@
 {/if}
 
 {#if calcOpen}
-  <CalculatorDialog on:close={() => (calcOpen = false)} />
+  <CalculatorDialog initialTab={calcTab} on:close={() => (calcOpen = false)} />
 {/if}
 
 <UpdateCard />
@@ -593,6 +785,41 @@
 
   .app:not(.notes-mode) {
     grid-template-columns: var(--sidebar-w) 6px 0 0 1fr;
+  }
+
+  /* The notes list is hidden: its columns collapse to zero and the editor
+     takes the whole width. */
+  .app.list-hidden {
+    grid-template-columns: var(--sidebar-w) 6px 0 0 1fr;
+  }
+
+  .app.list-hidden :global(.editor-pane) {
+    grid-column: 5;
+  }
+
+  .app {
+    position: relative;
+  }
+
+  .list-restore {
+    position: absolute;
+    inset-inline-start: calc(var(--sidebar-w) + 16px);
+    bottom: 42px;
+    z-index: 6;
+    width: 28px;
+    height: 28px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    border: 1px solid var(--border);
+    background: var(--bg-elevated);
+    color: var(--text-muted);
+    box-shadow: var(--shadow);
+  }
+
+  .list-restore:hover {
+    color: var(--accent);
+    border-color: var(--accent);
   }
 
   /* One row only: every pane stays beside the sidebar instead of wrapping below it. */
@@ -894,5 +1121,58 @@
   :global(body.col-resizing) {
     cursor: col-resize;
     user-select: none;
+  }
+
+  /* Drag-and-drop file drop overlay. */
+  .shell.drag-over {
+    background: rgba(232, 184, 48, 0.06);
+  }
+
+  .shell.drag-over::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    border: 3px dashed var(--accent);
+    border-radius: 6px;
+    pointer-events: none;
+    z-index: 50;
+    opacity: 0.85;
+  }
+
+  .shell.drag-over::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.35);
+    pointer-events: none;
+    z-index: 51;
+  }
+
+  /* The hint sits on its own plate so it reads over any picture. */
+  .drop-plate {
+    display: none;
+    position: absolute;
+    inset: 0;
+    place-items: center;
+    pointer-events: none;
+    z-index: 52;
+  }
+
+  .shell.drag-over .drop-plate {
+    display: grid;
+  }
+
+  .drop-plate span {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 14px 22px;
+    border-radius: 12px;
+    background: var(--bg-elevated);
+    border: 1px solid var(--accent);
+    box-shadow: var(--shadow);
+    color: var(--accent);
+    font-size: 1.05em;
+    font-weight: 600;
   }
 </style>

@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>جدول الجرد وعد الفلوس</title>
+<style>
+:root{--bg:#fff;--fg:#111;--head:#5a5a5a;--headfg:#fff;--row:#d9d9d9;--cell:#fff;--foot:#444;--line:#999;
+--acc:#2f6fb0;--accfg:#fff;--soft:#eef3f9;
+box-sizing:border-box;padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){--bg:#1b1b1b;--fg:#eee;--head:#444;--row:#333;--cell:#222;--foot:#000;--line:#666;--acc:#3f83c9;--soft:#242c35}}
+html{scroll-padding-top:env(safe-area-inset-top,0px)}
+body{margin:0;padding:16px;background:var(--bg);color:var(--fg);font-family:Tahoma,Arial,sans-serif}
+.wrap{overflow-x:auto;max-width:100%}
+table{border-collapse:collapse;margin:auto;min-width:640px;text-align:center}
+th,td{border:1px solid var(--line);padding:8px 10px;font-size:16px;font-weight:bold}
+thead th{background:var(--head);color:var(--headfg)}
+td.g{background:var(--row)}
+td.in{background:var(--cell);padding:0}
+td.in input{width:60px;border:0;background:transparent;color:var(--fg);text-align:center;font:inherit;padding:8px 0}
+td.in input:focus{outline:2px solid #4a90e2}
+td.empty{background:var(--cell)}
+tfoot td{background:var(--foot);color:#fff}
+tfoot td.blank{background:var(--cell);border:1px solid var(--line)}
+.num{direction:ltr;unicode-bidi:isolate;font-variant-numeric:tabular-nums}
+
+/* ===== money counter ===== */
+.panel{margin-top:22px;border:1px solid var(--line);border-radius:10px;background:var(--cell);padding:14px}
+.panel>h2{margin:0 0 12px;font-size:19px;color:var(--acc)}
+.two{display:flex;gap:16px;flex-wrap:wrap;justify-content:center}
+.card{flex:1 1 320px;min-width:300px;border:1px solid var(--line);border-radius:10px;padding:12px;background:var(--bg)}
+.card h3{margin:0 0 10px;font-size:16px}
+.row{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px}
+.row input[type=number]{width:150px;padding:9px 10px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--fg);font:inherit;text-align:center}
+.btn{padding:9px 14px;border:1px solid var(--acc);border-radius:8px;background:var(--acc);color:var(--accfg);font:inherit;font-weight:bold;cursor:pointer}
+.btn:active{transform:translateY(1px)}
+.btn.ghost{background:transparent;color:var(--acc)}
+table.mt{min-width:0;width:100%;font-size:15px}
+table.mt th,table.mt td{padding:6px 8px;font-size:15px}
+table.mt tr.fke td{background:var(--soft)}
+table.mt .fke-label{color:var(--acc);font-weight:700}
+table.mt td.in input{width:80px;padding:6px 0}
+table.mt tfoot td{background:var(--foot);color:#fff}
+.hint{margin:-4px 0 10px;font-size:0.82em;opacity:.72;line-height:1.5}
+.note{margin-top:8px;font-size:14px;color:var(--fg);min-height:20px}
+.note.bad{color:#c0392b}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]) .note.bad{color:#ff7b6b}}
+</style>
+</head>
+<body>
+<div class="wrap">
+<table id="invTable">
+<thead>
+<tr><th>ع</th><th>ربطة</th><th>باكو</th><th>ورقة</th><th>اجمالي ربطة</th><th>ج1</th><th>ج2</th><th>ج 0</th><th></th></tr>
+</thead>
+<tbody id="body"></tbody>
+<tfoot>
+<tr>
+<td class="blank"></td><td class="blank"></td><td class="blank"></td><td class="blank"></td>
+<td id="tb" class="num">0</td><td id="t1" class="num">0</td><td id="t2" class="num">0</td><td id="t0" class="num">0</td><td class="blank"></td>
+</tr>
+</tfoot>
+</table>
+</div>
+
+<section class="panel">
+<h2>عد الفلوس</h2>
+<div class="two">
+
+  <div class="card">
+    <h3>فك مبلغ إلى أوراق</h3>
+    <div class="row">
+      <input id="mcAmount" type="text" inputmode="decimal" placeholder="0">
+      <button class="btn" id="mcBreak">فك المبلغ</button>
+      <button class="btn ghost" id="mcFromTotal">من إجمالي الجرد</button>
+    </div>
+    <table class="mt">
+      <thead><tr><th>الفئة</th><th>العدد</th><th>الإجمالي</th></tr></thead>
+      <tbody id="mcOut"></tbody>
+      <tfoot><tr><td colspan="2">الإجمالي</td><td id="mcOutTotal" class="num">0.00</td></tr></tfoot>
+    </table>
+    <div id="mcNote" class="note"></div>
+  </div>
+
+  <div class="card">
+    <h3>عدّ الملاحظات</h3>
+    <p class="hint">لو فيه مبلغ فكة، اكتبه في سطر «مبلغ فكة» — بيتجمع على الإجمالي على طول.</p>
+    <table class="mt">
+      <thead><tr><th>الفئة</th><th>العدد</th><th>الإجمالي</th></tr></thead>
+      <tbody id="mcIn"></tbody>
+      <tfoot><tr><td colspan="2">الإجمالي</td><td id="mcInTotal" class="num">0.00</td></tr></tfoot>
+    </table>
+  </div>
+
+</div>
+</section>
+
+<script>
+/* ============ helpers: English digits everywhere ============ */
+const toLatinDigits = s => String(s)
+  .replace(/[\u0660-\u0669\u06F0-\u06F9]/g, d => {
+    const c = d.charCodeAt(0);
+    return String(c >= 0x06F0 ? c - 0x06F0 : c - 0x0660);
+  })
+  .replace(/\u066B/g, '.')   // الفاصلة العشرية العربية (٫)
+  .replace(/\u066C/g, '');   // فاصل الآلاف العربي (٬)
+const fmt = n => Number(n).toLocaleString('en-US');          // integers
+const fmt2 = n => Number(n).toLocaleString('en-US', {minimumFractionDigits:2, maximumFractionDigits:2});
+const parseNum = v => { const n = parseFloat(toLatinDigits(v).replace(/,/g,'')); return isFinite(n) ? n : 0; };
+
+/* ============ inventory table ============ */
+const denoms=[200,100,50,20,10,5];
+const labels=['ج1','ج2','ج3','ف2','ف3','ف4'];
+const body=document.getElementById('body');
+
+denoms.forEach((d,i)=>{
+  const tr=document.createElement('tr');
+  tr.innerHTML=
+    `<td class="g num">${d}</td>`+
+    `<td class="in"><input type="text" inputmode="numeric" placeholder="0" data-k="r"></td>`+
+    `<td class="in"><input type="text" inputmode="numeric" placeholder="0" data-k="p"></td>`+
+    `<td class="in"><input type="text" inputmode="numeric" placeholder="0" data-k="w"></td>`+
+    `<td class="g num" data-o="b"></td>`+
+    `<td class="g num" data-o="1"></td>`+
+    `<td class="g num" data-o="2"></td>`+
+    (i<3?`<td class="g num" data-s="${i}"></td>`:`<td class="empty"></td>`)+
+    `<td class="g">${labels[i]}</td>`;
+  tr.dataset.d=d;
+  body.appendChild(tr);
+});
+
+let tb=0,t1=0,t2=0;
+function calc(){
+  tb=0;t1=0;t2=0;
+  body.querySelectorAll('tr').forEach(tr=>{
+    const d=+tr.dataset.d;
+    const v=k=>Math.max(0,parseNum(tr.querySelector(`[data-k="${k}"]`).value));
+    const b=v('r')*d*500;   // ربطة = 500 ورقة
+    const c1=v('p')*d*100;  // باكو = 100 ورقة
+    const c2=v('w')*d;      // ورقة
+    tr.querySelector('[data-o="b"]').textContent=fmt(b);
+    tr.querySelector('[data-o="1"]').textContent=fmt(c1);
+    tr.querySelector('[data-o="2"]').textContent=fmt(c2);
+    tb+=b;t1+=c1;t2+=c2;
+  });
+  const sums=[tb,t1,t2];
+  body.querySelectorAll('[data-s]').forEach(td=>td.textContent=fmt(sums[+td.dataset.s]));
+  document.getElementById('tb').textContent=fmt(tb);
+  document.getElementById('t1').textContent=fmt(t1);
+  document.getElementById('t2').textContent=fmt(t2);
+  document.getElementById('t0').textContent=fmt(tb+t1+t2);
+}
+body.addEventListener('input',calc);
+
+/* ============ money counter ============ */
+// كل الفئات أوراق بالجنيه المصري فقط (مفيش عملات)
+const NOTE_VALS=[200,100,50,20,10,5,1];
+const cents = v => Math.round(v*100);
+
+const mcOut=document.getElementById('mcOut');
+const mcIn =document.getElementById('mcIn');
+const mcOutTotal=document.getElementById('mcOutTotal');
+const mcInTotal=document.getElementById('mcInTotal');
+const mcNote=document.getElementById('mcNote');
+const mcAmount=document.getElementById('mcAmount');
+
+// 1) جدول العد اليدوي (عدد الملاحظات لكل فئة => الإجمالي)
+// + سطر «مبلغ فكة»: المبلغ يُكتب مباشرة ويُجمع على الإجمالي من غير ضرب في عدد.
+function buildCountTable(){
+  mcIn.innerHTML='';
+  const addRow=(v)=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=
+      `<td class="num">${v}</td>`+
+      `<td class="in"><input type="text" inputmode="numeric" placeholder="0" data-v="${v}"></td>`+
+      `<td class="num" data-s="${v}">0.00</td>`;
+    mcIn.appendChild(tr);
+  };
+  NOTE_VALS.forEach(addRow);
+
+  const fkeRow=document.createElement('tr');
+  fkeRow.className='fke';
+  fkeRow.innerHTML=
+    `<td class="num fke-label" title="مبلغ الفكة أو العملات">مبلغ فكة</td>`+
+    `<td class="in"><input type="text" inputmode="decimal" placeholder="0" data-k="fke" `+
+    `title="اكتب مبلغ الفكة مباشرة — بيتجمع على الإجمالي زي ما هو"></td>`+
+    `<td class="num" data-s="fke">0.00</td>`;
+  mcIn.appendChild(fkeRow);
+
+  mcIn.addEventListener('input',()=>{
+    let total=0;
+    mcIn.querySelectorAll('tr').forEach(tr=>{
+      const inp=tr.querySelector('input[data-v]');
+      if(!inp) return;
+      const v=+inp.dataset.v;
+      const n=Math.max(0,Math.floor(parseNum(inp.value)));
+      const sub=n*v;
+      total+=sub;
+      tr.querySelector('[data-s]').textContent=fmt2(sub);
+    });
+    // مبلغ الفكة: المبلغ المكتوب يدخل في الإجمالي على طول.
+    const fke=Math.max(0,parseNum(mcIn.querySelector('input[data-k="fke"]')?.value));
+    const fkeCell=mcIn.querySelector('[data-s="fke"]');
+    if(fkeCell) fkeCell.textContent=fmt2(fke);
+    total+=fke;
+    mcInTotal.textContent=fmt2(total);
+  });
+}
+
+// 2) فك مبلغ الى اوراق (Notes فقط — بدون عملات)
+function breakdown(amount){
+  let rest=cents(amount);
+  const rows=[];
+  NOTE_VALS.forEach(v=>{
+    const c=v*100;
+    const n=Math.floor(rest/c);
+    if(n<=0) return;
+    rest-=n*c;
+    rows.push({v,n,sub:n*v});
+  });
+  const sum=rows.reduce((s,r)=>s+r.sub,0);
+  return {rows,left:Math.round((amount-sum)*100)/100};
+}
+
+function renderBreakdown(){
+  const amount=parseNum(mcAmount.value);
+  if(amount<=0){ mcOut.innerHTML=''; mcOutTotal.textContent=fmt2(0); mcNote.textContent=''; mcNote.className='note'; return; }
+  const {rows,left}=breakdown(amount);
+  mcOut.innerHTML='';
+  rows.forEach(r=>{
+    const tr=document.createElement('tr');
+    tr.innerHTML=`<td class="num">${r.v}</td><td class="num">${fmt(r.n)}</td><td class="num">${fmt2(r.sub)}</td>`;
+    mcOut.appendChild(tr);
+  });
+  mcOutTotal.textContent=fmt2(rows.reduce((s,r)=>s+r.sub,0));
+  mcNote.className='note'+(left>0?' bad':'');
+  mcNote.textContent = left>0
+    ? `الجزء الصغير غير قابل للفك بالأوراق: ${fmt2(left)}`
+    : `تم فك ${fmt2(amount)} جنيه بالكامل.`;
+}
+
+document.getElementById('mcBreak').addEventListener('click',renderBreakdown);
+mcAmount.addEventListener('input',renderBreakdown);
+mcAmount.addEventListener('keydown',e=>{ if(e.key==='Enter') renderBreakdown(); });
+document.getElementById('mcFromTotal').addEventListener('click',()=>{
+  mcAmount.value=String(Math.round(tb+t1+t2));
+  renderBreakdown();
+});
+
+buildCountTable();
+calc();
+</script>
+</body>
+</html>
